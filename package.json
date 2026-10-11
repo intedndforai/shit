@@ -22,7 +22,11 @@
     "artifacts:check": "node scripts/artifacts-check.mjs",
     "privacy:check": "node scripts/privacy-check.mjs",
     "coding:check": "node scripts/coding-check.mjs",
-    "redact:check": "tsx scripts/redact-check.ts"
+    "redact:check": "tsx scripts/redact-check.ts",
+    "cf:build": "opennextjs-cloudflare build",
+    "cf:preview": "opennextjs-cloudflare preview",
+    "cf:deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "cf:dry-run": "opennextjs-cloudflare build && wrangler deploy --dry-run"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.2.7",
@@ -69,6 +73,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.7",
+    "@opennextjs/cloudflare": "1.20.9",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.6.4",
@@ -80,7 +85,8 @@
     "prettier": "^3.9.10",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "wrangler": "^4.147.0"
   },
   "engines": {
     "node": ">=20.9.0"

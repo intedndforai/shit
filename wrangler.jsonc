@@ -1,0 +1,30 @@
+// Cloudflare Workers configuration for the OpenNext (Next.js) build.
+//
+// Both names below must match the Worker in your Cloudflare account. `name` is
+// the Worker this deploy targets, and the WORKER_SELF_REFERENCE service binding
+// must point at that same Worker. If they disagree, `wrangler deploy` fails
+// with:
+//
+//   Service binding 'WORKER_SELF_REFERENCE' references Worker '<other>' which
+//   was not found. Verify the Worker exists in your account and that the
+//   service name in your configuration is correct. [code: 10143]
+//
+// That error means a stale name is still configured. Renaming the Worker in the
+// dashboard means editing both values here.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "shit",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS",
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "shit",
+    },
+  ],
+}

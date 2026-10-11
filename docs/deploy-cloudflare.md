@@ -13,6 +13,80 @@ Summary of the three routes:
 | Containers | Paid Workers plan | None, uses the existing `Dockerfile` | Standalone server verified locally |
 | Tunnel | Free | None | Works with the running app |
 
+## What the repository configures for Workers
+
+Two files at the repository root drive a Worker build, and both have to agree
+with the Worker name in your Cloudflare account.
+
+`wrangler.jsonc` names the Worker, points at the OpenNext entry point, turns on
+the Node compatibility flag, and binds the static assets:
+
+```jsonc
+"name": "shit",
+"main": ".open-next/worker.js",
+"compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+"assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+"services": [{ "binding": "WORKER_SELF_REFERENCE", "service": "shit" }]
+```
+
+`open-next.config.ts` keeps the incremental cache, tag cache and queue overrides
+at their defaults, so the Worker boots without an R2 bucket, a KV namespace, or
+a Durable Object binding.
+
+Both files are optional for the D1 refactor in Path A, and neither is used by
+Path B or Path C.
+
+### Cloudflare Workers Builds settings
+
+When the Worker is connected to this Git repository, point the pipeline at the
+scripts in `package.json` so it does not fall back to a guessed build:
+
+| Setting | Value |
+| --- | --- |
+| Build command | `npm run cf:build` |
+| Deploy command | `npx wrangler deploy` |
+| Root directory | `/` |
+
+`npm run cf:deploy` does both steps if you would rather keep one command. Also
+check the Worker's Settings page for bindings that were added by hand earlier:
+anything still naming a Worker that no longer exists fails the upload with error
+10143 before the code is even considered.
+
+### Error 10143: a service binding referenced a Worker that does not exist
+
+```
+Service binding 'WORKER_SELF_REFERENCE' references Worker 'conduit' which was
+not found. Verify the Worker exists in your account and that the service name in
+your configuration is correct. [code: 10143]
+```
+
+The bundle built fine; the upload aborted because a service binding pointed at a
+name left over from an earlier attempt. `name` and `services[].service` must both
+be the Worker that exists in the account. Rename the Worker in the dashboard and
+you edit both values; leave one behind and the error returns. If your Cloudflare
+project holds an older service binding from the dashboard, delete it there or
+bring it in line with `wrangler.jsonc`.
+
+The `[equals-negative-zero]` warning printed just above that error is unrelated
+and harmless. It comes from minifying a dependency inside
+`.open-next/server-functions/default/handler.mjs`, so there is nothing to fix in
+this codebase.
+
+### Building on Windows
+
+The OpenNext build copies Next's traced output and recreates the symlinks Next
+writes for externalized packages (`better-sqlite3`, `mammoth`, `xlsx`). Creating
+a symlink on Windows needs Developer Mode or an elevated shell, so without one
+the local build stops with:
+
+```
+Error: EPERM: operation not permitted, symlink ... better-sqlite3 ...
+```
+
+Turn on **Settings → System → For developers → Developer Mode** (or build in
+WSL, a container, or CI) and the same command completes. Deploys are unaffected,
+because Cloudflare's builders run on Linux.
+
 ## Why a plain upload to Pages or Workers fails
 
 **Cloudflare Pages** serves static assets and runs only edge functions. Conduit
@@ -89,7 +163,7 @@ application changes:
 2. Add a `wrangler.jsonc` with a container and the public route:
    ```jsonc
    {
-     "name": "conduit",
+     "name": "shit", // must match the Worker name in your Cloudflare account
      "main": "src/container-worker.ts",
      "compatibility_date": "2026-01-01",
      "containers": [{ "class_name": "ConduitContainer", "image": "./Dockerfile" }],
@@ -116,18 +190,21 @@ standalone layout.
 Once the async refactor above exists, the deploy is:
 
 ```bash
-npm install --save-dev @opennextjs/cloudflare@^1.20.10 wrangler@^4.148.0
-npx opennextjs-cloudflare build          # writes .open-next/worker.js
-npx wrangler deploy --dry-run            # bundle report, no account needed
+npm install                  # @opennextjs/cloudflare and wrangler are devDeps
+npm run cf:build             # writes .open-next/worker.js
+npm run cf:dry-run           # bundle report, no account needed
 npx wrangler d1 create conduit && npx wrangler d1 migrations apply conduit
 npx wrangler r2 bucket create conduit-uploads
-npx wrangler deploy
+npm run cf:deploy            # build, then deploy
 ```
 
-`@opennextjs/cloudflare` 1.20.x accepts `next >=16.3.8 <17`, and this app is on
-Next 16.4.0, so the adapter version is not the blocker. Note the `wrangler` on
-this machine is 4.147.0, one patch below the adapter's peer range; use
-`npx wrangler@latest` or upgrade the global install first.
+The adapter and wrangler are pinned in `devDependencies`, and the pin matters.
+`@opennextjs/cloudflare@1.20.10` declares a peer of `wrangler@^4.148.0`, a
+version that is not published, so `npm install` fails with `ERESOLVE` whatever
+wrangler you happen to have. 1.20.9 declares `wrangler@^4.125.0`, resolves
+against the published 4.147.0, and still accepts `next >=16.3.8 <17`, which
+covers this app on 16.4.0. Move both together, and check the adapter's wrangler
+peer range is actually published before bumping.
 
 ## Before you deploy anywhere
 
@@ -139,6 +216,7 @@ npm run files:check       # with the app and mock provider running
 npm run artifacts:check
 npm run privacy:check
 npm run coding:check
+npm run cf:dry-run        # OpenNext build plus a Cloudflare bundle report; no account needed
 ```
 
 Set at least `ENCRYPTION_KEY` and `NEXT_PUBLIC_APP_URL` in the target

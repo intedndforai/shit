@@ -146,7 +146,10 @@ The compose file stores SQLite data in the `conduit-data` volume mounted at `/da
 
 For Cloudflare, read [docs/deploy-cloudflare.md](docs/deploy-cloudflare.md). Pages cannot run this
 app, a bare Workers upload needs an async D1 rewrite, a Tunnel needs no code changes, and Containers
-can run the image above as it is.
+can run the image above as it is. The repository ships `wrangler.jsonc` and
+`open-next.config.ts`, so a Workers build has the entry point, compatibility flags and
+bindings it needs: `npm run cf:build` writes `.open-next/`, and `npm run cf:deploy`
+builds and deploys the Worker.
 
 ## Connecting a provider
 
@@ -265,6 +268,9 @@ docs/                Architecture notes and screenshots
 | `npm run privacy:check` | Verify privacy modes, reversible redaction, the policy gate and the egress log (needs dev + mock provider). |
 | `npm run coding:check` | Verify the coding workspace tools, their guard rails and the in-chat model selector (needs dev + mock provider). |
 | `npm run redact:check` | Unit-check the reversible redaction engine. |
+| `npm run cf:build` | OpenNext build for Cloudflare Workers, writing `.open-next/`. |
+| `npm run cf:deploy` | Build and deploy to the Worker named in `wrangler.jsonc`. |
+| `npm run cf:dry-run` | Build, then bundle for Cloudflare without deploying anything. |
 
 ## Privacy
 
