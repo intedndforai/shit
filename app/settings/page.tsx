@@ -4,7 +4,12 @@ import { AccentPicker } from "@/components/accent-picker";
 import { PageShell } from "@/components/layout/page-shell";
 import { ProviderManager } from "@/components/settings/provider-manager";
 import { ToolsManager } from "@/components/settings/tools-manager";
+import { MemoryManager } from "@/components/settings/memory-manager";
+import { ModelRolesManager } from "@/components/settings/model-roles";
 import { PresetsManager } from "@/components/settings/presets-manager";
+import { ProfileManager } from "@/components/settings/profile-manager";
+import { PromptsManager } from "@/components/settings/prompts-manager";
+import { StylesManager } from "@/components/settings/styles-manager";
 import { ThemeSelect } from "@/components/settings/theme-select";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -23,7 +28,7 @@ export default function SettingsPage() {
   return (
     <PageShell
       title="Settings"
-      description="Appearance, providers, and data. Everything here is stored locally on your machine."
+      description="Appearance, personalization, providers, and data. Everything here is stored locally on your machine."
     >
       <Card>
         <CardHeader>
@@ -51,9 +56,19 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      <ProfileManager />
+
       <ProviderManager />
 
+      <StylesManager />
+
+      <MemoryManager />
+
+      <PromptsManager />
+
       <ToolsManager />
+
+      <ModelRolesManager />
 
       <PresetsManager />
 

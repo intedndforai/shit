@@ -280,6 +280,8 @@ export const projects = sqliteTable("projects", {
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().$defaultFn(now),
 });
 
+export type Project = typeof projects.$inferSelect;
+
 export const projectFiles = sqliteTable("project_files", {
   id: text("id").primaryKey().$defaultFn(uuid),
   projectId: text("project_id")
@@ -293,6 +295,32 @@ export const projectFiles = sqliteTable("project_files", {
   chunkCount: integer("chunk_count").notNull().default(0),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().$defaultFn(now),
 });
+
+/**
+ * Retrieval chunks for a project file. Embeddings are kept as a JSON array so a
+ * deployment without sqlite-vec still works: cosine similarity runs in-process
+ * over the project's chunks, which is plenty for personal-scale knowledge bases.
+ */
+export const projectChunks = sqliteTable(
+  "project_chunks",
+  {
+    id: text("id").primaryKey().$defaultFn(uuid),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    fileId: text("file_id")
+      .notNull()
+      .references(() => projectFiles.id, { onDelete: "cascade" }),
+    ordinal: integer("ordinal").notNull().default(0),
+    content: text("content").notNull(),
+    embedding: text("embedding", { mode: "json" }).$type<number[]>(),
+    tokens: integer("tokens").notNull().default(0),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().$defaultFn(now),
+  },
+  (table) => [index("project_chunks_project_idx").on(table.projectId)]
+);
+
+export type ProjectChunk = typeof projectChunks.$inferSelect;
 
 /* ------------------------------------------------------------------ */
 /* Memory (M8)                                                         */

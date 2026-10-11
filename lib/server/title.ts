@@ -3,6 +3,7 @@ import { getAdapter, contentToText } from "@/lib/providers";
 import { connectionFromProvider, defaultProviderRow, getDefaultModel } from "@/lib/server/providers";
 import { getActivePath } from "@/lib/server/branches";
 import { getDb } from "@/lib/db";
+import { assignedRole } from "@/lib/server/roles";
 import { models, providers, type Provider } from "@/lib/db/schema";
 
 /**
@@ -11,12 +12,15 @@ import { models, providers, type Provider } from "@/lib/db/schema";
  */
 function titleProvider(): Provider | undefined {
   return (
+    assignedRole("title")?.provider ??
     getDb().select().from(providers).where(eq(providers.isTitleModel, true)).limit(1).get() ??
     defaultProviderRow()
   );
 }
 
 function titleModelId(providerId: string): string {
+  const assigned = assignedRole("title");
+  if (assigned) return assigned.model.externalId;
   return (
     getDb()
       .select()

@@ -851,6 +851,384 @@ await jsonFetch(`/api/providers/${flakyProviderId}`, { method: "DELETE" });
 await new Promise((resolve) => flakyServer.close(resolve));
 
 
+// --- Milestone 8: projects, retrieval, memory, styles, prompts -------------
+
+/** Streams a chat turn and returns every SSE event it produced. */
+const streamEvents = async (payload) => {
+  const response = await fetch(`${appUrl}/api/chat`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const events = [];
+  if (!response.ok || !response.body) return events;
+  const reader = response.body.getReader();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let index = buf.indexOf("\n\n");
+    while (index !== -1) {
+      const chunk = buf.slice(0, index).trim();
+      buf = buf.slice(index + 2);
+      index = buf.indexOf("\n\n");
+      if (!chunk.startsWith("data:")) continue;
+      events.push(JSON.parse(chunk.slice(5).trim()));
+    }
+  }
+  return events;
+};
+
+const eventsText = (events) =>
+  events
+    .filter((event) => event.type === "text_delta")
+    .map((event) => event.text)
+    .join("");
+
+// Clean slate, so the checks below stay repeatable on a reused database.
+const staleProjects = await jsonFetch("/api/projects");
+for (const project of staleProjects.body?.projects ?? []) {
+  await jsonFetch(`/api/projects/${project.id}`, { method: "DELETE" });
+}
+const staleMemories = await jsonFetch("/api/memories");
+for (const memory of staleMemories.body?.memories ?? []) {
+  await jsonFetch(`/api/memories/${memory.id}`, { method: "DELETE" });
+}
+const staleStyles = await jsonFetch("/api/styles");
+for (const style of staleStyles.body?.styles ?? []) {
+  if (!style.builtin) await jsonFetch(`/api/styles/${style.id}`, { method: "DELETE" });
+}
+const stalePrompts = await jsonFetch("/api/prompts");
+for (const prompt of stalePrompts.body?.prompts ?? []) {
+  if (!prompt.builtin) await jsonFetch(`/api/prompts/${prompt.id}`, { method: "DELETE" });
+}
+
+// Preferences
+const profileSaved = await jsonFetch("/api/profile", {
+  method: "PUT",
+  body: JSON.stringify({ name: "Smoke Tester", role: "QA", instructions: "Lead with the answer." }),
+});
+const profileRead = await jsonFetch("/api/profile");
+check(
+  "profile and preferences round-trip through the API",
+  profileSaved.status === 200 &&
+    profileRead.body?.profile?.name === "Smoke Tester" &&
+    profileRead.body?.profile?.instructions === "Lead with the answer.",
+  profileRead.body?.profile?.role
+);
+
+const profileChat = await jsonFetch("/api/chats", {
+  method: "POST",
+  body: JSON.stringify({ title: "Profile marker" }),
+});
+const profileEvents = await streamEvents({ chatId: profileChat.body?.chat?.id, message: "marker-check profile" });
+check(
+  "profile preferences are layered onto every chat",
+  eventsText(profileEvents).includes("profile-marker-applied"),
+  eventsText(profileEvents).slice(0, 48)
+);
+
+// Model roles
+const modelOptions = await jsonFetch("/api/models");
+check(
+  "every stored model is listed with its provider",
+  modelOptions.status === 200 &&
+    (modelOptions.body?.models ?? []).some((model) => model.id === modelId && model.providerName),
+  `${(modelOptions.body?.models ?? []).length} models`
+);
+const rolesSaved = await jsonFetch("/api/roles", {
+  method: "PUT",
+  body: JSON.stringify({ embeddings: modelId, title: modelId, summarization: modelId }),
+});
+check(
+  "the title, summarization, and embeddings roles can be assigned",
+  rolesSaved.status === 200 &&
+    rolesSaved.body?.assignments?.embeddings === modelId &&
+    rolesSaved.body?.assignments?.title === modelId &&
+    rolesSaved.body?.assignments?.summarization === modelId,
+  JSON.stringify(rolesSaved.body?.assignments)
+);
+
+// Response styles
+const styles = await jsonFetch("/api/styles");
+check(
+  "built-in response styles are seeded",
+  styles.status === 200 &&
+    ["normal", "concise", "explanatory", "formal"].every((slug) =>
+      (styles.body?.styles ?? []).some((style) => style.slug === slug)
+    ),
+  `${(styles.body?.styles ?? []).length} styles`
+);
+const createdStyle = await jsonFetch("/api/styles", {
+  method: "POST",
+  body: JSON.stringify({ name: "Smoke style", instructions: "Answer in exactly three bullets." }),
+});
+const smokeStyleId = createdStyle.body?.style?.id;
+check(
+  "a custom style can be created",
+  createdStyle.status === 201 && createdStyle.body?.style?.builtin === false,
+  createdStyle.body?.style?.slug
+);
+const updatedStyle = await jsonFetch(`/api/styles/${smokeStyleId}`, {
+  method: "PATCH",
+  body: JSON.stringify({ instructions: "Answer in exactly three bullets and nothing else." }),
+});
+check(
+  "a custom style can be edited",
+  updatedStyle.status === 200 && String(updatedStyle.body?.style?.instructions ?? "").includes("nothing else")
+);
+const builtinStyle = (styles.body?.styles ?? []).find((style) => style.slug === "concise");
+const builtinStyleDelete = await jsonFetch(`/api/styles/${builtinStyle?.id}`, { method: "DELETE" });
+check("built-in styles are protected", builtinStyleDelete.status === 400, `HTTP ${builtinStyleDelete.status}`);
+
+const styleChat = await jsonFetch("/api/chats", {
+  method: "POST",
+  body: JSON.stringify({ title: "Style chat", styleId: smokeStyleId }),
+});
+const styleEvents = await streamEvents({ chatId: styleChat.body?.chat?.id, message: "marker-check style" });
+check(
+  "a chat's response style reaches the model",
+  eventsText(styleEvents).includes("style-marker-applied"),
+  eventsText(styleEvents).slice(0, 48)
+);
+const styleDetail = await jsonFetch(`/api/chats/${styleChat.body?.chat?.id}`);
+check("the chat remembers its style", styleDetail.body?.chat?.styleId === smokeStyleId);
+const deletedStyle = await jsonFetch(`/api/styles/${smokeStyleId}`, { method: "DELETE" });
+check("a custom style can be deleted", deletedStyle.status === 200);
+
+// Slash commands
+const prompts = await jsonFetch("/api/prompts");
+check(
+  "built-in slash commands are seeded",
+  prompts.status === 200 &&
+    (prompts.body?.prompts ?? []).some((prompt) => prompt.command === "summarize" && prompt.builtin),
+  `${(prompts.body?.prompts ?? []).length} commands`
+);
+const createdPrompt = await jsonFetch("/api/prompts", {
+  method: "POST",
+  body: JSON.stringify({ name: "Smoke command", command: "smoke-command", content: "Do the thing with {text}" }),
+});
+check(
+  "a custom slash command can be saved",
+  createdPrompt.status === 201 && createdPrompt.body?.prompt?.command === "smoke-command",
+  createdPrompt.body?.prompt?.command
+);
+const duplicatePrompt = await jsonFetch("/api/prompts", {
+  method: "POST",
+  body: JSON.stringify({ name: "Duplicate", command: "smoke-command", content: "nope" }),
+});
+check("duplicate slash commands are rejected", duplicatePrompt.status === 400, String(duplicatePrompt.body?.error ?? ""));
+const smokePromptId = createdPrompt.body?.prompt?.id;
+const updatedPrompt = await jsonFetch(`/api/prompts/${smokePromptId}`, {
+  method: "PATCH",
+  body: JSON.stringify({ content: "Do the other thing with {text}" }),
+});
+check(
+  "a slash command can be edited",
+  updatedPrompt.status === 200 && String(updatedPrompt.body?.prompt?.content ?? "").includes("other thing")
+);
+const builtinPrompt = (prompts.body?.prompts ?? []).find((prompt) => prompt.command === "summarize");
+const builtinPromptDelete = await jsonFetch(`/api/prompts/${builtinPrompt?.id}`, { method: "DELETE" });
+check("built-in slash commands are protected", builtinPromptDelete.status === 400);
+const deletedPrompt = await jsonFetch(`/api/prompts/${smokePromptId}`, { method: "DELETE" });
+check("a custom slash command can be deleted", deletedPrompt.status === 200);
+
+// Projects + retrieval (vector path, because an embeddings role is assigned)
+const project = await jsonFetch("/api/projects", {
+  method: "POST",
+  body: JSON.stringify({
+    name: "Smoke project",
+    description: "Retrieval",
+    instructions: "Cite the file you used.",
+  }),
+});
+const projectId = project.body?.project?.id;
+check("a project can be created", project.status === 201 && Boolean(projectId), projectId);
+
+const attached = await jsonFetch(`/api/projects/${projectId}/files`, {
+  method: "POST",
+  body: JSON.stringify({
+    name: "handbook.md",
+    text: "# Handbook\n\nThe smoke marker kb-marker-7 lives here. Conduit chunks this file and retrieves the passage that matches a question.",
+  }),
+});
+check(
+  "a text file is chunked and indexed",
+  attached.status === 201 && attached.body?.file?.status === "indexed" && attached.body?.file?.chunkCount >= 1,
+  `${attached.body?.file?.chunkCount} chunks`
+);
+check("an assigned embeddings model embeds new files", attached.body?.embedded === true);
+
+const projectDetail = await jsonFetch(`/api/projects/${projectId}`);
+check(
+  "the project exposes files, chats, and stats",
+  projectDetail.status === 200 &&
+    projectDetail.body?.stats?.chunks >= 1 &&
+    (projectDetail.body?.files?.length ?? 0) === 1,
+  JSON.stringify(projectDetail.body?.stats)
+);
+
+const projectChat = await jsonFetch("/api/chats", {
+  method: "POST",
+  body: JSON.stringify({ projectId, title: "Project chat" }),
+});
+const projectChatId = projectChat.body?.chat?.id;
+check("a chat can be scoped to a project", projectChat.status === 201 && Boolean(projectChatId));
+
+const projectEvents = await streamEvents({ chatId: projectChatId, message: "What is kb-marker-7?" });
+const sourcesEvent = projectEvents.find((event) => event.type === "sources");
+check(
+  "project retrieval attaches knowledge-base excerpts",
+  Boolean(sourcesEvent) && sourcesEvent.sources.length >= 1,
+  sourcesEvent ? `${sourcesEvent.sources.length} excerpts` : "no sources event"
+);
+check("retrieval reports the vector path", sourcesEvent?.mode === "embeddings", sourcesEvent?.mode);
+check(
+  "the excerpts reach the model's system prompt",
+  eventsText(projectEvents).includes("kb-marker-7"),
+  eventsText(projectEvents).slice(0, 60)
+);
+
+const projectChats = await jsonFetch(`/api/projects/${projectId}`);
+check(
+  "the project lists the chats that belong to it",
+  (projectChats.body?.chats ?? []).some((chat) => chat.id === projectChatId),
+  `${(projectChats.body?.chats ?? []).length} chats`
+);
+
+// Keyword fallback: no embeddings role, so retrieval ranks with BM25.
+await jsonFetch("/api/roles", { method: "PUT", body: JSON.stringify({ embeddings: null }) });
+const keywordProject = await jsonFetch("/api/projects", {
+  method: "POST",
+  body: JSON.stringify({ name: "Smoke keyword project" }),
+});
+const keywordProjectId = keywordProject.body?.project?.id;
+const keywordFile = await jsonFetch(`/api/projects/${keywordProjectId}/files`, {
+  method: "POST",
+  body: JSON.stringify({ name: "notes.md", text: "Without an embeddings model this passage is found by keyword ranking. kb-marker-7 again." }),
+});
+check(
+  "without an embeddings model, files are indexed with keyword search",
+  keywordFile.status === 201 && keywordFile.body?.embedded === false,
+  `embedded: ${keywordFile.body?.embedded}`
+);
+const keywordChat = await jsonFetch("/api/chats", {
+  method: "POST",
+  body: JSON.stringify({ projectId: keywordProjectId, title: "Keyword chat" }),
+});
+const keywordEvents = await streamEvents({ chatId: keywordChat.body?.chat?.id, message: "Where is kb-marker-7 mentioned?" });
+const keywordSources = keywordEvents.find((event) => event.type === "sources");
+check(
+  "keyword retrieval still finds the passage",
+  Boolean(keywordSources) && keywordSources.mode === "keywords" && keywordSources.sources.length >= 1,
+  `${keywordSources?.mode} · ${keywordSources?.sources?.length ?? 0} excerpts`
+);
+check(
+  "the keyword passage reaches the model",
+  eventsText(keywordEvents).includes("kb-marker-7"),
+  eventsText(keywordEvents).slice(0, 60)
+);
+
+// Memory: proposals, storage, editing, recall, and incognito isolation.
+const memoryOn = await jsonFetch("/api/memories", { method: "POST", body: JSON.stringify({ enabled: true }) });
+check("memory can be switched on", memoryOn.status === 200 && memoryOn.body?.enabled === true);
+
+const memoryChat = await jsonFetch("/api/chats", {
+  method: "POST",
+  body: JSON.stringify({ title: "Memory proposal" }),
+});
+const memoryChatId = memoryChat.body?.chat?.id;
+const memoryEvents = await streamEvents({ chatId: memoryChatId, message: "please remember that I prefer short answers" });
+check(
+  "the model's memory proposal streams to the browser",
+  memoryEvents.some((event) => event.type === "memory" && String(event.fact).toLowerCase().includes("short")),
+  JSON.stringify(memoryEvents.filter((event) => event.type === "memory").map((event) => event.fact))
+);
+const memoryState = await jsonFetch("/api/memories");
+const proposed = (memoryState.body?.memories ?? []).find((memory) => memory.content.includes("short, direct answers"));
+check("the proposed fact is stored", Boolean(proposed), `${(memoryState.body?.memories ?? []).length} memories`);
+
+const memoryTranscript = await jsonFetch(`/api/chats/${memoryChatId}`);
+const storedAnswer = (memoryTranscript.body?.messages ?? [])
+  .filter((message) => message.role === "assistant")
+  .flatMap((message) => message.content ?? [])
+  .filter((part) => part.kind === "text")
+  .map((part) => part.text)
+  .join("");
+check(
+  "memory tags are stripped from the stored answer",
+  storedAnswer.length > 0 && !storedAnswer.includes("<memory>"),
+  storedAnswer.slice(0, 40)
+);
+const editedMemory = await jsonFetch(`/api/memories/${proposed?.id}`, {
+  method: "PATCH",
+  body: JSON.stringify({ content: "Prefers short answers (smoke-tested)." }),
+});
+check(
+  "a memory can be edited",
+  editedMemory.status === 200 && String(editedMemory.body?.memory?.content ?? "").includes("smoke-tested")
+);
+const removedMemory = await jsonFetch(`/api/memories/${proposed?.id}`, { method: "DELETE" });
+check("a memory can be deleted", removedMemory.status === 200);
+
+await jsonFetch("/api/memories", {
+  method: "POST",
+  body: JSON.stringify({ content: "The user keeps a talking parrot named Kiwi." }),
+});
+const recallChat = await jsonFetch("/api/chats", {
+  method: "POST",
+  body: JSON.stringify({ title: "Memory recall" }),
+});
+const recallEvents = await streamEvents({
+  chatId: recallChat.body?.chat?.id,
+  message: "marker-check memory: what do you know about Kiwi?",
+});
+check(
+  "relevant memories are recalled into the system prompt",
+  eventsText(recallEvents).includes("memory-marker-recalled"),
+  eventsText(recallEvents).slice(0, 48)
+);
+
+const protocolChat = await jsonFetch("/api/chats", { method: "POST", body: JSON.stringify({ title: "Memory protocol" }) });
+const protocolEvents = await streamEvents({ chatId: protocolChat.body?.chat?.id, message: "memory-protocol-check" });
+check(
+  "the model is taught the memory protocol",
+  eventsText(protocolEvents).includes("memory-protocol-applied"),
+  eventsText(protocolEvents).slice(0, 48)
+);
+
+// Incognito: answers stream, nothing is written.
+const incognitoChat = await jsonFetch("/api/chats", {
+  method: "POST",
+  body: JSON.stringify({ incognito: true }),
+});
+const incognitoId = incognitoChat.body?.chat?.id;
+const incognitoEvents = await streamEvents({
+  chatId: incognitoId,
+  message: "please remember that this turn must never be stored",
+});
+check("an incognito chat still answers", eventsText(incognitoEvents).length > 10, eventsText(incognitoEvents).slice(0, 40));
+const incognitoProtocol = await streamEvents({ chatId: incognitoId, message: "memory-protocol-check" });
+check(
+  "incognito chats are not offered the memory protocol",
+  eventsText(incognitoProtocol).includes("memory-protocol-missing"),
+  eventsText(incognitoProtocol).slice(0, 48)
+);
+check(
+  "incognito chats persist no messages",
+  (await jsonFetch(`/api/chats/${incognitoId}`)).body?.messages?.length === 0
+);
+const historyAfter = await jsonFetch("/api/chats");
+check(
+  "incognito chats stay out of the history list",
+  !(historyAfter.body?.chats ?? []).some((chat) => chat.id === incognitoId)
+);
+
+// Deleting a project removes its chats' scoping but keeps the chats.
+const deletedProject = await jsonFetch(`/api/projects/${keywordProjectId}`, { method: "DELETE" });
+check("a project can be deleted", deletedProject.status === 200);
+
 const failed = results.filter((result) => !result.ok);
 console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
 process.exitCode = failed.length === 0 ? 0 : 1;

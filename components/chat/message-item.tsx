@@ -1,13 +1,15 @@
 "use client";
 
 import * as React from "react";
-import { Brain, Check, Copy, FileText, Pencil, RefreshCw, TriangleAlert, X } from "lucide-react";
+import { Brain, BrainCircuit, Check, Copy, FileText, Pencil, RefreshCw, TriangleAlert, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { MarkdownRenderer } from "@/components/markdown/markdown-renderer";
 import { Blocks } from "lucide-react";
 import { parseArtifacts, stripArtifacts } from "@/lib/artifacts";
+import { splitMemoryTags } from "@/lib/memory-tags";
+import { SourceList } from "@/components/chat/sources-list";
 import { useUIStore } from "@/lib/store/ui-store";
 import { VersionSwitcher } from "@/components/chat/version-switcher";
 import { CitationList, ToolCallList } from "@/components/chat/tool-call";
@@ -85,8 +87,11 @@ export function MessageItem({
   const switchBranch = useChatStore((state) => state.switchBranch);
 
   const rawText = textOf(message);
-  const artifacts = React.useMemo(() => parseArtifacts(rawText), [rawText]);
-  const text = artifacts.length ? stripArtifacts(rawText) : rawText;
+  // Facts the model wrapped in <memory> blocks are stored separately; the
+  // transcript shows the plain answer plus a small chip.
+  const withoutMemory = React.useMemo(() => splitMemoryTags(rawText).text, [rawText]);
+  const artifacts = React.useMemo(() => parseArtifacts(withoutMemory), [withoutMemory]);
+  const text = artifacts.length ? stripArtifacts(withoutMemory) : withoutMemory;
   const thinking = thinkingOf(message);
   const thinkingPart = message.content.find((part) => part.kind === "thinking");
   const thinkingMs = thinkingPart && thinkingPart.kind === "thinking" ? thinkingPart.durationMs : undefined;
@@ -245,6 +250,17 @@ export function MessageItem({
       <ToolCallList content={message.content} />
 
       {message.citations?.length ? <CitationList citations={message.citations} /> : null}
+
+      {message.sources?.length ? (
+        <SourceList sources={message.sources} mode={message.sourceMode} />
+      ) : null}
+
+      {message.memoryNotes?.length ? (
+        <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+          <BrainCircuit className="mt-0.5 size-3.5 shrink-0 text-accent" />
+          <span>Remembered: {message.memoryNotes.join(" · ")}</span>
+        </p>
+      ) : null}
 
       {message.error ? (
         <div className="flex items-start gap-2 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">

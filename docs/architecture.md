@@ -171,6 +171,46 @@ transcript can explain itself, and repoints the chat at the model that answered.
 
 A chat keeps the model it was created with; the request body can override it per turn.
 
+## Projects, retrieval, and memory (M8)
+
+A project is a knowledge base plus an instruction set, and every chat can be scoped to one.
+`POST /api/projects/:id/files` extracts text through the same pipeline as attachments (M4), splits it
+into paragraph-aware ~1200-character chunks with 180 characters of overlap (`lib/rag/chunk.ts`), and
+stores one `project_chunks` row per chunk. The chat route asks for the top passages with the last user
+message as the query and appends them to the system prompt as numbered excerpts, which is why the model
+can cite a file name.
+
+Retrieval degrades instead of failing:
+
+| Situation | What happens |
+| --- | --- |
+| An embeddings model is assigned (Settings → Model roles) | Chunks and the query are embedded through `POST {baseUrl}/embeddings`; ranking is cosine similarity |
+| No embeddings model | Okapi BM25 over the same chunks, so retrieval works out of the box |
+| No chunks | Nothing is injected and no `sources` event is sent |
+
+Embeddings are stored as JSON arrays in the chunk row rather than in a vector index. At personal scale
+(thousands of chunks) an in-process cosine scan is faster than the round trip to a separate index, it
+keeps the database a single portable file, and it avoids a native `sqlite-vec` dependency. The trade-off
+is documented rather than hidden: past ~10^5 chunks the scan would want an index.
+
+The browser learns what was used through a `sources` event (`{ sources, mode }`), rendered as a
+collapsible list under the answer; the mode tells the user whether they are looking at vector or
+keyword results.
+
+Memory is the same idea applied to the user rather than their files. The system prompt invites the model
+to wrap durable facts in `<memory>…</memory>`; the route stores each fact in `memories`, streams a
+`memory` event so the transcript can show a chip, and strips the tags before persisting the answer.
+Later turns recall the best-matching facts with BM25 (a handful of facts is not worth a vector index).
+The feature is off by default, every fact is editable in Settings → Memory, and **incognito chats skip
+the database entirely**: the client sends its own transcript with each turn, and the server neither
+writes messages, titles, nor memories.
+
+Model roles (`lib/server/roles.ts`) are stored as model ids in `app_settings` and mirror the older
+provider-level flags, so the title, summarization, and embeddings jobs can each point at a cheap model.
+Response styles and saved prompts are plain rows (`response_styles`, `saved_prompts`) seeded with
+built-ins; styles are appended to the system prompt per chat, and prompts are expanded client-side by
+the composer's `/` menu.
+
 ## Provider contract
 
 ```ts
@@ -226,8 +266,9 @@ forwarded. Once tokens are flowing, a retry would duplicate output, so errors ar
 
 ## Decisions and trade-offs
 
-- **SQLite + Drizzle, not Postgres.** A personal chat client should be one file you can copy. Vector
-  search (M8) will use `sqlite-vec` when available, with BM25/full-context fallback.
+- **SQLite + Drizzle, not Postgres.** A personal chat client should be one file you can copy. Retrieval
+  keeps embeddings inline as JSON vectors with an in-process cosine scan, and falls back to BM25 when no
+  embeddings model is configured.
 - **Dexie mirror for local-only mode.** The browser store mirrors the same entities so a future sync
   layer is mechanical; today the server database is the source of truth.
 - **SSE, not WebSockets.** Provider APIs are HTTP streams; SSE keeps every hop a plain HTTP response

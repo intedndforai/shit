@@ -47,6 +47,25 @@ function messageText(message) {
   return "";
 }
 
+/**
+ * Deterministic bag-of-words embedding: identical text yields an identical
+ * vector, and texts that share words point in a similar direction. That is
+ * enough to exercise the vector retrieval path end to end.
+ */
+function embed(text, dimensions = 32) {
+  const vector = new Array(dimensions).fill(0);
+  const tokens = String(text).toLowerCase().match(/[a-z0-9_]+/g) ?? [];
+  for (const token of tokens) {
+    let hash = 0;
+    for (let index = 0; index < token.length; index += 1) {
+      hash = (hash * 31 + token.charCodeAt(index)) % 100000;
+    }
+    vector[hash % dimensions] += 1;
+  }
+  const norm = Math.sqrt(vector.reduce((total, value) => total + value * value, 0)) || 1;
+  return vector.map((value) => value / norm);
+}
+
 let artifactRevision = 0;
 
 function plainReply(question) {
@@ -85,6 +104,10 @@ function buildFrames(body) {
   const question = messageText(last);
   const toolResults = messages.filter((message) => message.role === "tool");
   const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
+  const systemText = messages
+    .filter((message) => message.role === "system")
+    .map(messageText)
+    .join("\n");
 
   // Second pass: the model has the tool output and answers with prose.
   if (toolResults.length) {
@@ -138,6 +161,57 @@ function buildFrames(body) {
     };
   }
 
+  // The server layers the profile, memory, and response style onto the system
+  // prompt. These markers (only produced when the question says "marker-check")
+  // prove each layer reached the model.
+  if (/memory-protocol-check/i.test(question)) {
+    const text = /durable facts about the user across chats/i.test(systemText)
+      ? "memory-protocol-applied"
+      : "memory-protocol-missing";
+    return { frames: text.split(" ").map((word, index) => ({ content: (index === 0 ? "" : " ") + word })), text };
+  }
+
+  if (/marker-check/i.test(question)) {
+    const marker = /Response style:/i.test(systemText)
+      ? "style-marker-applied"
+      : /Things you remember about this user/i.test(systemText)
+        ? "memory-marker-recalled"
+        : /How they want you to respond:/i.test(systemText)
+          ? "profile-marker-applied"
+          : null;
+    if (marker) {
+      const text = marker + " " + plainReply(question);
+      return {
+        frames: text.split(" ").map((word, index) => ({ content: (index === 0 ? "" : " ") + word })),
+        text,
+      };
+    }
+  }
+
+  // "remember" makes the model propose a fact with a <memory> block, which the
+  // server stores and strips from the transcript.
+  if (/remember/i.test(question)) {
+    const text = [
+      "Noted.",
+      "<memory>The user prefers short, direct answers.</memory>",
+      "Anything else you want me to hold on to?",
+    ].join("\n");
+    return {
+      frames: text.split(" ").map((word, index) => ({ content: (index === 0 ? "" : " ") + word })),
+      text,
+    };
+  }
+
+  // A question about the project knowledge base: the server injects the matching
+  // excerpts into the system prompt, so echoing the marker proves retrieval ran.
+  if (/kb-marker-7/i.test(systemText)) {
+    const text = "I found kb-marker-7 in the project knowledge base excerpt you gave me.";
+    return {
+      frames: text.split(" ").map((word, index) => ({ content: (index === 0 ? "" : " ") + word })),
+      text,
+    };
+  }
+
   // "think" asks for a reasoning trace first, so the Thinking panel has something to show.
   if (/think|reason/i.test(question)) {
     const reply = plainReply(question);
@@ -164,6 +238,29 @@ const server = createServer((req, res) => {
 
   if (req.method === "GET" && url.pathname.endsWith("/models")) {
     json(res, 200, { object: "list", data: MODELS });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname.endsWith("/embeddings")) {
+    let raw = "";
+    req.on("data", (chunk) => {
+      raw += chunk;
+    });
+    req.on("end", () => {
+      let body = {};
+      try {
+        body = JSON.parse(raw || "{}");
+      } catch {
+        json(res, 400, { error: { message: "Invalid JSON body." } });
+        return;
+      }
+      const inputs = Array.isArray(body.input) ? body.input : [body.input ?? ""];
+      json(res, 200, {
+        object: "list",
+        model: body.model ?? "mock-embed",
+        data: inputs.map((text, index) => ({ object: "embedding", index, embedding: embed(String(text)) })),
+      });
+    });
     return;
   }
 

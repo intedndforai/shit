@@ -25,7 +25,7 @@ format. Requests go through your own server, so keys never reach the browser.
 | **M5** | Artifacts panel with sandboxing and versioning | ✅ Shipped |
 | **M6** | Tool calling, web search, fetch, calculator, CSV analysis, citations | ✅ Shipped |
 | **M7** | Thinking display, context meter, cost tracking, fallback + retry | ✅ Shipped |
-| M8 | Projects, RAG, memory, styles, slash commands | ⏳ Planned |
+| **M8** | Projects, RAG, memory, styles, preferences, slash commands | ✅ Shipped |
 | M9 | MCP client, custom tools, Deep Research | ⏳ Planned |
 | M10 | Voice, accessibility, PWA, shortcuts, mobile polish | ⏳ Planned |
 | M11 | Multi-user auth, sharing, usage dashboard, Docker, tests | ⏳ Partial (Docker, single-user mode) |
@@ -67,6 +67,22 @@ What works today:
   prompt, with presets you can save in Settings.
 - Requests retry on 429/5xx with exponential backoff, and a model you mark as the **fallback**
   takes over automatically when the chosen one is unreachable — the transcript says so.
+- **Projects** bundle instructions, a knowledge base, and their own chats. Upload text, Markdown,
+  PDF, DOCX, or spreadsheets and Conduit extracts, chunks, and indexes them; each project chat
+  retrieves the top passages (vector search when an embeddings model is assigned, keyword ranking
+  otherwise) and shows them under the answer as collapsible excerpts with the mode used.
+- **Memory** lets the model propose facts with a `<memory>` block (or you can add your own in
+  Settings → Memory). Relevant memories are recalled into later chats, and the whole store can be
+  edited or deleted. **Incognito** chats are never written to the database at all: no history, no
+  memory, no titles.
+- **Response styles** (Normal, Concise, Explanatory, Formal, plus your own) are picked per chat from
+  the bar above the composer, and you can derive a custom style from a writing sample.
+- **Slash commands**: type `/` in the composer for saved prompts (`/summarize`, `/translate`, or your
+  own from Settings → Slash commands), and `@` to switch the model for the next turn.
+- **Model roles** in Settings point titles, context summaries, and embeddings at specific models;
+  leave one on Default and the chat model handles it.
+- **Profile and preferences** (name, role, "how should the AI respond") are layered onto every chat's
+  system prompt.
 - Light / dark / system themes and a user-selectable accent color.
 
 ## Screenshots
@@ -139,8 +155,7 @@ A mock OpenAI-compatible provider ships with the repo:
 
 ```bash
 npm run mock:provider     # serves http://127.0.0.1:4123/v1 with two fake models
-npm run smoke
-npm run files:check             # 17 end-to-end checks: provider CRUD, streaming, persistence, regenerate
+npm run smoke                  # 100+ end-to-end checks (provider CRUD, streaming, tools, RAG, memory, …)
 ```
 
 Add a provider pointing at `http://127.0.0.1:4123/v1` (any key) to chat with the mock from the UI.
@@ -189,9 +204,15 @@ app/                 App Router pages and /api routes
   api/chat/          SSE streaming endpoint (the chat pipeline)
   api/providers/     Provider CRUD, connection test, model discovery
   api/chats/         Chat + message persistence
+  api/projects/      Projects, knowledge-base files, chunking + retrieval
+  api/memories/      Cross-chat memory
+  api/styles/        Response styles (built-in + derived from a sample)
+  api/prompts/       Slash-command library
+  api/roles/         Title / summarization / embeddings model roles
 components/          UI: layout shell, chat surface, settings, Radix primitives
 lib/providers/       Adapter layer (OpenAI-compatible, Anthropic) + SSE + retry helpers
-lib/server/          Server-only data access (providers, chats, usage, validation)
+lib/server/          Server-only data access (providers, chats, projects, memory, usage, validation)
+lib/rag/             Chunking, BM25, cosine similarity
 lib/db/              Drizzle schema, SQLite client, migrations
 lib/store/           Zustand stores (UI state, chat/streaming state)
 lib/local/           Dexie (IndexedDB) store for local-only mode
@@ -212,8 +233,8 @@ docs/                Architecture notes and screenshots
 | `npm run db:generate` | Generate SQL migrations from `lib/db/schema.ts`. |
 | `npm run db:studio` | Browse the database with Drizzle Studio. |
 | `npm run mock:provider` | Start the local mock provider on port 4123. |
-| `npm run smoke
-npm run files:check` | Run the end-to-end API checks against a running app. |
+| `npm run smoke` | Run the end-to-end API checks (100+) against a running app. |
+| `npm run files:check` | Verify upload/extraction handling. |
 
 ## Security
 

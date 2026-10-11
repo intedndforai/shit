@@ -63,6 +63,8 @@ interface UIState {
   pendingTools: string[] | null;
   /** Ephemeral state for browser-executed tool calls, keyed by tool call id. */
   toolRuns: Record<string, ToolRunState>;
+  /** Model chosen with an @-mention; applied to the next turn. */
+  pendingModelId: string | null;
   /* Actions */
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
@@ -77,6 +79,7 @@ interface UIState {
   removeAttachment: (id: string) => void;
   clearAttachments: () => void;
   setPendingTools: (tools: string[] | null) => void;
+  setPendingModelId: (modelId: string | null) => void;
   startToolRun: (run: ToolRunState) => void;
   patchToolRun: (id: string, patch: Partial<ToolRunState>) => void;
   removeToolRun: (id: string) => void;
@@ -95,6 +98,7 @@ export const useUIStore = create<UIState>()(
       attachments: [],
       pendingTools: null,
       toolRuns: {},
+      pendingModelId: null,
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       setMobileNavOpen: (mobileNavOpen) => set({ mobileNavOpen }),
@@ -114,6 +118,7 @@ export const useUIStore = create<UIState>()(
         set((state) => ({ attachments: state.attachments.filter((attachment) => attachment.id !== id) })),
       clearAttachments: () => set({ attachments: [] }),
       setPendingTools: (pendingTools) => set({ pendingTools }),
+      setPendingModelId: (pendingModelId) => set({ pendingModelId }),
       startToolRun: (run) => set((state) => ({ toolRuns: { ...state.toolRuns, [run.id]: run } })),
       patchToolRun: (id, patch) =>
         set((state) => {

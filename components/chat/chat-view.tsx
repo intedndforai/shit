@@ -8,6 +8,7 @@ import { Composer } from "@/components/layout/composer";
 import { EmptyState } from "@/components/layout/empty-state";
 import { MessageList } from "@/components/chat/message-list";
 import { ArtifactPanel } from "@/components/artifacts/artifact-panel";
+import { ChatContextBar } from "@/components/chat/context-bar";
 import { ContextMeter } from "@/components/chat/context-meter";
 import { useChatStore } from "@/lib/store/chat-store";
 
@@ -60,6 +61,7 @@ export function ChatView() {
         </div>
       ) : null}
 
+      <ChatContextBar />
       <ContextMeter />
       <Composer onSend={send} onStop={stop} streaming={streaming} />
       </div>

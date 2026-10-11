@@ -23,6 +23,16 @@ import { recordArtifacts } from "@/lib/server/artifacts";
 import { resolveToolNames, runTool, toolDefinitions, toolSpec, type ToolCitation } from "@/lib/tools/registry";
 import { readToolsConfig } from "@/lib/tools/web-search";
 import { waitForClientTool } from "@/lib/server/pending-tools";
+import { styleInstructions } from "@/lib/server/styles";
+import { getProject, retrieveProjectContext, type RetrievedPassage } from "@/lib/server/projects";
+import {
+  addMemory,
+  extractMemoryProposals,
+  memoryEnabled,
+  relevantMemories,
+  stripMemoryTags,
+} from "@/lib/server/memory";
+import { profileInstructions } from "@/lib/server/profile";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,6 +67,19 @@ const bodySchema = z.object({
   continueFromLeaf: z.boolean().optional(),
   /** Per-chat tool selection; null means "use the registry defaults". */
   toolsEnabled: z.array(z.string()).nullable().optional(),
+  /**
+   * Transcript sent by the client. Only used for incognito chats, which never
+   * touch the database, so their context lives in the tab that owns them.
+   */
+  history: z
+    .array(
+      z.object({
+        role: z.enum(["system", "user", "assistant", "tool"]),
+        content: z.array(contentPartSchema),
+      })
+    )
+    .max(200)
+    .optional(),
 });
 
 function toContentParts(
@@ -86,11 +109,25 @@ function toContentParts(
   });
 }
 
+/**
+ * Memory tags are stripped before an answer is stored: the fact lives in
+ * Settings, and the transcript keeps the plain answer.
+ */
+function stripMemoryTagsFromParts(parts: ContentPart[]): ContentPart[] {
+  return parts.map((part) => (part.kind === "text" ? { ...part, text: stripMemoryTags(part.text) } : part));
+}
+
 type OutgoingEvent =
   | StreamEvent
   | { type: "chat"; chatId: string; title: string | null }
   | { type: "message_ids"; assistantMessageId: string }
   | { type: "model_switch"; modelLabel: string; reason?: string }
+  | {
+      type: "sources";
+      mode: "embeddings" | "keywords" | "none";
+      sources: Array<{ title: string; snippet: string }>;
+    }
+  | { type: "memory"; fact: string }
   | { type: "tool_status"; id: string; name: string; status: "running" | "success" | "error" }
   | {
       type: "tool_approval";
@@ -163,7 +200,13 @@ export async function POST(request: Request) {
   let contextRows = getActivePath(chatId);
   let parentId: string | null = null;
 
-  if (body.message) {
+  const incognito = chat.incognito;
+  let pendingUserParts: ContentPart[] | null = null;
+
+  if (body.message && incognito) {
+    pendingUserParts = toContentParts(body.message);
+    parentId = null;
+  } else if (body.message) {
     parentId = contextRows.length ? contextRows[contextRows.length - 1].id : null;
     const parts = toContentParts(body.message);
     const userRow = appendMessage({
@@ -195,16 +238,59 @@ export async function POST(request: Request) {
     parentId = contextRows.length ? contextRows[contextRows.length - 1].id : null;
   }
 
-  const branchIndex = nextBranchIndex(chatId, parentId);
-  const historyForModel: InternalMessage[] = contextRows.map((row) => ({
-    role: row.role,
-    content: row.content ?? [],
-  }));
+  const branchIndex = incognito ? 0 : nextBranchIndex(chatId, parentId);
+  const historyForModel: InternalMessage[] = incognito
+    ? [
+        ...(body.history ?? []).map((message) => ({ role: message.role, content: message.content as ContentPart[] })),
+        ...(pendingUserParts ? [{ role: "user" as const, content: pendingUserParts }] : []),
+      ]
+    : contextRows.map((row) => ({ role: row.role, content: row.content ?? [] }));
 
-  const systemPrompt =
+  const baseSystemPrompt =
     body.systemPrompt ??
     chat.systemPrompt ??
     "You are a helpful assistant inside Conduit, a self-hosted chat client. Use the tools you are given when they help, and cite any URLs you rely on.";
+
+  /** Everything layered onto the base prompt for this turn. */
+  const contextBlocks: string[] = [];
+  const profile = profileInstructions();
+  if (profile) contextBlocks.push(profile);
+  const style = styleInstructions(chat.styleId);
+  if (style) contextBlocks.push(`Response style: ${style}`);
+  if (chat.projectId) {
+    const project = getProject(chat.projectId);
+    if (project?.instructions) contextBlocks.push(`Project instructions: ${project.instructions}`);
+  }
+  const lastUserText = (() => {
+    const lastUser = [...contextRows].reverse().find((row) => row.role === "user");
+    if (!lastUser) return typeof body.message === "string" ? body.message : "";
+    return (lastUser.content ?? [])
+      .map((part) => (part.kind === "text" ? part.text : part.kind === "document" ? part.text ?? "" : ""))
+      .join("\n")
+      .trim();
+  })();
+
+  // Memory has two halves: the model is told how to propose a fact, and the
+  // facts already stored are recalled for this question. Incognito chats opt
+  // out of both, and the whole feature is off unless it was switched on.
+  if (memoryEnabled() && !chat.incognito) {
+    contextBlocks.push(
+      [
+        "Memory: you can remember durable facts about the user across chats.",
+        "Save one by wrapping it in a <memory> block, for example <memory>The user prefers concise answers.</memory>.",
+        "Conduit stores those blocks in Settings and removes them from the transcript, so save at most one fact per turn, and only when it will still be useful later.",
+      ].join(" ")
+    );
+  }
+
+  if (memoryEnabled() && !chat.incognito && lastUserText) {
+    const memories = relevantMemories(lastUserText);
+    if (memories.length) {
+      contextBlocks.push(
+        `Things you remember about this user (from earlier chats):\n${memories.map((memory) => `- ${memory}`).join("\n")}`
+      );
+    }
+  }
 
   // Snapshotted for the stream closure: the fallback path may change the chat.
   const initialTitle = chat.title;
@@ -221,16 +307,19 @@ export async function POST(request: Request) {
   const enabledToolNames = toolCapable ? resolveToolNames(chat.toolsEnabled ?? undefined) : [];
   const tools = enabledToolNames.length ? toolDefinitions(enabledToolNames) : undefined;
 
-  // Create the assistant row up front so a dropped connection still leaves a saved message.
-  const assistantRow = appendMessage({
-    chatId,
-    role: "assistant",
-    content: [],
-    modelId: model.id,
-    parentId,
-    branchIndex,
-  });
-  setActiveLeaf(chatId, assistantRow.id);
+  // Create the assistant row up front so a dropped connection still leaves a saved
+  // message. Incognito chats keep everything in memory instead.
+  const assistantRow = incognito
+    ? { id: `incognito-${Date.now().toString(36)}` }
+    : appendMessage({
+        chatId,
+        role: "assistant",
+        content: [],
+        modelId: model.id,
+        parentId,
+        branchIndex,
+      });
+  if (!incognito) setActiveLeaf(chatId, assistantRow.id);
 
   const encoder = new TextEncoder();
   const ac = new AbortController();
@@ -279,6 +368,31 @@ export async function POST(request: Request) {
         if (last?.kind === "text") last.text += delta;
         else timeline.push({ kind: "text", text: delta });
       };
+
+      let systemPrompt = contextBlocks.length ? `${baseSystemPrompt}\n\n${contextBlocks.join("\n\n")}` : baseSystemPrompt;
+      let passages: RetrievedPassage[] = [];
+
+      if (chat?.projectId && lastUserText) {
+        try {
+          const retrieval = await retrieveProjectContext(chat.projectId, lastUserText);
+          passages = retrieval.passages;
+          if (passages.length) {
+            systemPrompt += `\n\nExcerpts from the project's knowledge base (cite the file names you use):\n${passages
+              .map((passage, index) => `[${index + 1}] ${passage.file}\n${passage.content}`)
+              .join("\n\n")}`;
+            send({
+              type: "sources",
+              mode: retrieval.mode,
+              sources: passages.map((passage) => ({
+                title: passage.file,
+                snippet: passage.content.slice(0, 240),
+              })),
+            });
+          }
+        } catch {
+          /* retrieval is best effort */
+        }
+      }
 
       send({ type: "chat", chatId, title: initialTitle });
       send({ type: "message_ids", assistantMessageId: assistantRow.id });
@@ -489,7 +603,23 @@ export async function POST(request: Request) {
           completionTokens
         );
 
-        updateMessage(assistantRow.id, { content, tokenUsage: usage, cost, error: errored });
+        // The model can propose facts with <memory>…</memory>; the transcript keeps
+        // the plain answer, and the proposal is stored when memory is on.
+        if (memoryEnabled() && !chat?.incognito && textParts.length) {
+          const { proposals } = extractMemoryProposals(textParts.join(""));
+          for (const proposal of proposals) {
+            if (addMemory(proposal, chatId)) send({ type: "memory", fact: proposal });
+          }
+        }
+
+        if (!incognito) {
+          updateMessage(assistantRow.id, {
+            content: stripMemoryTagsFromParts(content),
+            tokenUsage: usage,
+            cost,
+            error: errored,
+          });
+        }
         recordUsage({
           providerId: provider.id,
           modelId: model.id,

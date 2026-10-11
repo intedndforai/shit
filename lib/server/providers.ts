@@ -227,6 +227,36 @@ export function listStoredModels(providerId?: string) {
   return rows;
 }
 
+/** A stored model with its provider name, for pickers that span providers. */
+export interface ModelOption {
+  id: string;
+  providerId: string;
+  providerName: string;
+  externalId: string;
+  displayName: string | null;
+  contextWindow: number;
+  maxOutputTokens: number;
+  capabilities: Record<string, boolean>;
+  isDefault: boolean;
+  isFallback: boolean;
+}
+
+export function listModelOptions(): ModelOption[] {
+  const names = new Map(listProviders().map((provider) => [provider.id, provider.name]));
+  return listStoredModels().map((model) => ({
+    id: model.id,
+    providerId: model.providerId,
+    providerName: names.get(model.providerId) ?? "Provider",
+    externalId: model.externalId,
+    displayName: model.displayName,
+    contextWindow: model.contextWindow,
+    maxOutputTokens: model.maxOutputTokens,
+    capabilities: model.capabilities,
+    isDefault: model.isDefault,
+    isFallback: model.isFallback,
+  }));
+}
+
 export function setDefaultModel(modelId: string) {
   const db = getDb();
   const model = db.select().from(models).where(eq(models.id, modelId)).get();

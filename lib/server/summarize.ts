@@ -5,6 +5,7 @@ import { appendMessage } from "@/lib/server/chats";
 import { connectionFromProvider, defaultProviderRow } from "@/lib/server/providers";
 import { estimateContentTokens } from "@/lib/tokens";
 import { getDb } from "@/lib/db";
+import { assignedRole } from "@/lib/server/roles";
 import { messages, models, providers, type Provider } from "@/lib/db/schema";
 
 /**
@@ -30,12 +31,15 @@ export interface SummarizeResult {
 
 function summarizationProvider(): Provider | undefined {
   return (
+    assignedRole("summarization")?.provider ??
     getDb().select().from(providers).where(eq(providers.isSummarizationModel, true)).limit(1).get() ??
     defaultProviderRow()
   );
 }
 
 function summarizationModelId(providerId: string): string | null {
+  const assigned = assignedRole("summarization");
+  if (assigned) return assigned.model.externalId;
   const row = getDb()
     .select()
     .from(models)

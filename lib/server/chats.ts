@@ -15,6 +15,9 @@ export const chatPatchSchema = z.object({
   maxTokens: z.number().int().min(1).max(200000).optional(),
   thinkingBudget: z.number().int().min(0).max(131072).nullable().optional(),
   toolsEnabled: z.array(z.string()).nullable().optional(),
+  styleId: z.string().nullable().optional(),
+  projectId: z.string().nullable().optional(),
+  incognito: z.boolean().optional(),
   pinned: z.boolean().optional(),
   archived: z.boolean().optional(),
 });
@@ -35,7 +38,14 @@ export interface ChatSummary {
 
 export function listChats(): ChatSummary[] {
   const db = getDb();
-  const rows = db.select().from(chats).orderBy(desc(chats.pinned), desc(chats.updatedAt)).all();
+  // Incognito chats exist only for the tab that opened them, so they never
+  // appear in the history list.
+  const rows = db
+    .select()
+    .from(chats)
+    .where(eq(chats.incognito, false))
+    .orderBy(desc(chats.pinned), desc(chats.updatedAt))
+    .all();
   const counts = db
     .select({ chatId: messages.chatId })
     .from(messages)
@@ -63,6 +73,9 @@ export function createChat(input: {
   providerId?: string | null;
   modelId?: string | null;
   systemPrompt?: string | null;
+  projectId?: string | null;
+  styleId?: string | null;
+  incognito?: boolean;
 }): Chat {
   return getDb()
     .insert(chats)
@@ -71,6 +84,9 @@ export function createChat(input: {
       providerId: input.providerId ?? null,
       modelId: input.modelId ?? null,
       systemPrompt: input.systemPrompt ?? null,
+      projectId: input.projectId ?? null,
+      styleId: input.styleId ?? null,
+      incognito: input.incognito ?? false,
     })
     .returning()
     .get();

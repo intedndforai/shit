@@ -19,6 +19,12 @@ export interface UiMessage {
   siblingIndex?: number;
   siblingCount?: number;
   citations?: { title: string; url: string }[];
+  /** Project knowledge-base excerpts used for this answer. */
+  sources?: { title: string; snippet: string }[];
+  /** How those excerpts were found: vector similarity or keyword ranking. */
+  sourceMode?: "embeddings" | "keywords" | "none";
+  /** Facts the model asked to remember while writing this answer. */
+  memoryNotes?: string[];
 }
 
 interface ChatState {
@@ -39,6 +45,9 @@ interface ChatState {
   chatMaxTokens: number;
   chatThinkingBudget: number | null;
   chatSystemPrompt: string | null;
+  chatIncognito: boolean;
+  chatStyleId: string | null;
+  chatProjectId: string | null;
   /** Set when a retry had to fall back to another model. */
   modelNote: string | null;
   messages: UiMessage[];
@@ -68,6 +77,13 @@ interface ChatState {
     systemPrompt?: string | null;
   }) => Promise<void>;
   summarize: (mode?: "auto" | "summarize" | "truncate") => Promise<string | null>;
+  updateChatMeta: (patch: {
+    styleId?: string | null;
+    projectId?: string | null;
+    incognito?: boolean;
+    modelId?: string | null;
+  }) => Promise<void>;
+  newChat: (options?: { projectId?: string | null; incognito?: boolean }) => Promise<string | null>;
 }
 
 let activeController: AbortController | null = null;
@@ -104,6 +120,9 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   chatMaxTokens: 8192,
   chatThinkingBudget: null,
   chatSystemPrompt: null,
+  chatIncognito: false,
+  chatStyleId: null,
+  chatProjectId: null,
   modelNote: null,
   messages: [],
   streaming: false,
@@ -128,6 +147,9 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         chatTitleSource: "auto",
         chatModelLabel: null,
         chatArchived: false,
+        chatIncognito: false,
+        chatStyleId: null,
+        chatProjectId: null,
         modelNote: null,
         messages: [],
         error: null,
@@ -156,6 +178,9 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         chatMaxTokens: data.chat.maxTokens,
         chatThinkingBudget: data.chat.thinkingBudget,
         chatSystemPrompt: data.chat.systemPrompt,
+        chatIncognito: data.chat.incognito,
+        chatStyleId: data.chat.styleId,
+        chatProjectId: data.chat.projectId,
         messages: data.messages.map(toUiMessage),
         loading: false,
         editingId: null,
@@ -195,10 +220,26 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
     set({ editingId: null });
     useUIStore.getState().clearAttachments();
+
+    const state = get();
+    const incognito = state.chatIncognito;
+    const pendingModelId = useUIStore.getState().pendingModelId;
     await runStream(set, get, {
       message: parts,
       toolsEnabled: useUIStore.getState().pendingTools,
+      modelId: pendingModelId,
+      // Incognito chats are never written to the database, so the tab sends the
+      // transcript it is showing to keep multi-turn context.
+      history: incognito
+        ? state.messages
+            .filter((message) => !message.streaming)
+            .map((message) => ({ role: message.role, content: message.content }))
+        : undefined,
     });
+    if (pendingModelId) {
+      useUIStore.getState().setPendingModelId(null);
+      await get().updateChatMeta({ modelId: pendingModelId });
+    }
   },
 
   async regenerate() {
@@ -279,6 +320,36 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     }
   },
 
+  async updateChatMeta(patch) {
+    const id = get().chatId;
+    set({
+      ...(patch.styleId !== undefined ? { chatStyleId: patch.styleId } : {}),
+      ...(patch.projectId !== undefined ? { chatProjectId: patch.projectId } : {}),
+      ...(patch.incognito !== undefined ? { chatIncognito: patch.incognito } : {}),
+    });
+    if (!id) return;
+    try {
+      await api.updateChat(id, patch);
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : "Could not save the chat." });
+    }
+  },
+
+  async newChat(options = {}) {
+    try {
+      const { chat } = await api.createChat({
+        projectId: options.projectId ?? null,
+        incognito: options.incognito ?? false,
+      });
+      await get().loadChats();
+      await get().openChat(chat.id);
+      return chat.id;
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : "Could not start a new chat." });
+      return null;
+    }
+  },
+
   async summarize(mode = "auto") {
     const id = get().chatId;
     if (!id) return null;
@@ -323,6 +394,8 @@ async function runStream(
     regenerate?: boolean;
     continueFromLeaf?: boolean;
     toolsEnabled?: string[] | null;
+    modelId?: string | null;
+    history?: Array<{ role: "system" | "user" | "assistant" | "tool"; content: ContentPart[] }>;
   }
 ): Promise<void> {
   const state = get();
@@ -367,6 +440,8 @@ async function runStream(
         regenerate: payload.regenerate,
         continueFromLeaf: payload.continueFromLeaf,
         toolsEnabled: payload.toolsEnabled,
+        modelId: payload.modelId ?? undefined,
+        history: payload.history,
       }),
       signal: controller.signal,
     });
@@ -407,12 +482,17 @@ async function runStream(
       }
     }
 
-    // Reconcile with the server (real ids, branch metadata) once the stream ends.
+    // Reconcile with the server (real ids, branch metadata) once the stream
+    // ends. Incognito chats have no server copy, so the tab keeps what it
+    // streamed and the transient excerpts stay attached to the visible answer.
     const chatId = get().chatId;
-    if (chatId) {
+    if (chatId && !get().chatIncognito) {
       const data = await api.getChat(chatId);
       set({
-        messages: data.messages.map(toUiMessage),
+        messages: carryLocalAnnotations(
+          data.messages.map(toUiMessage),
+          get().messages
+        ),
         chatTitle: data.chat.title,
         chatTitleSource: data.chat.titleSource,
         chatModelLabel: data.model ? data.model.displayName ?? data.model.externalId : null,
@@ -432,7 +512,7 @@ async function runStream(
       }));
     } else {
       const chatId = get().chatId;
-      if (chatId) {
+      if (chatId && !get().chatIncognito) {
         try {
           const data = await api.getChat(chatId);
           set({ messages: data.messages.map(toUiMessage) });
@@ -454,7 +534,7 @@ async function runStream(
     const state2 = get();
     // A placeholder title is replaced once the first answer exists, unless the
     // user renamed the chat or a title model already ran.
-    if (state2.chatId && state2.chatTitleSource === "auto") {
+    if (state2.chatId && state2.chatTitleSource === "auto" && !state2.chatIncognito) {
       void state2.refreshTitle();
     }
     if (!state2.chatId) {
@@ -512,6 +592,26 @@ function handleEvent(event: Record<string, unknown>, streamingId: string, set: S
 
   if (type === "usage") {
     update((message) => ({ ...message, usage: event.usage as UiMessage["usage"] }));
+    return;
+  }
+
+  if (type === "sources") {
+    const sources = Array.isArray(event.sources)
+      ? (event.sources as Array<{ title: string; snippet: string }>)
+      : [];
+    update((message) => ({
+      ...message,
+      sources,
+      sourceMode: (event.mode as UiMessage["sourceMode"]) ?? message.sourceMode,
+    }));
+    return;
+  }
+
+  if (type === "memory") {
+    const fact = event.fact as string;
+    if (fact) {
+      update((message) => ({ ...message, memoryNotes: [...(message.memoryNotes ?? []), fact] }));
+    }
     return;
   }
 
@@ -606,6 +706,27 @@ function handleEvent(event: Record<string, unknown>, streamingId: string, set: S
       citations: citations.length ? [...(message.citations ?? []), ...citations] : message.citations,
     }));
   }
+}
+
+/**
+ * The server stores messages, not the transient excerpts, citations, or memory
+ * notes that arrive on the stream. Carry those onto the reconciled answers.
+ */
+function carryLocalAnnotations(next: UiMessage[], local: UiMessage[]): UiMessage[] {
+  const localAssistants = local.filter((message) => message.role === "assistant");
+  let index = 0;
+  return next.map((message) => {
+    if (message.role !== "assistant") return message;
+    const source = localAssistants[index];
+    index += 1;
+    if (!source) return message;
+    return {
+      ...message,
+      ...(source.sources?.length ? { sources: source.sources, sourceMode: source.sourceMode } : {}),
+      ...(source.citations?.length ? { citations: source.citations } : {}),
+      ...(source.memoryNotes?.length ? { memoryNotes: source.memoryNotes } : {}),
+    };
+  });
 }
 
 export function textOf(message: UiMessage): string {
