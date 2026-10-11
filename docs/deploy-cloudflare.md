@@ -44,11 +44,19 @@ scripts in `package.json` so it does not fall back to a guessed build:
 | Setting | Value |
 | --- | --- |
 | Build command | `npm run cf:build` |
-| Deploy command | `npx wrangler deploy` |
+| Deploy command | `npm run cf:deploy` |
 | Root directory | `/` |
 
-`npm run cf:deploy` does both steps if you would rather keep one command. Also
-check the Worker's Settings page for bindings that were added by hand earlier:
+Use `npm run cf:deploy` as the deploy command rather than `npx wrangler
+deploy`. Wrangler spots the OpenNext layout and forwards to
+`opennextjs-cloudflare deploy`, which only inspects an existing build and fails
+with `Could not find compiled Open Next config, did you run the build command?`
+when the build step was skipped, ran in a different container, or produced
+nothing. `cf:deploy` builds and deploys in one process, so the compiled config is
+always present. If you keep the two-step form, the build has to run in the same
+job as the deploy.
+
+Also check the Worker's Settings page for bindings that were added by hand earlier:
 anything still naming a Worker that no longer exists fails the upload with error
 10143 before the code is even considered.
 
@@ -72,7 +80,35 @@ and harmless. It comes from minifying a dependency inside
 `.open-next/server-functions/default/handler.mjs`, so there is nothing to fix in
 this codebase.
 
+### Could not find compiled Open Next config
+
+```
+OpenNext project detected, calling `opennextjs-cloudflare deploy`
+ERROR Could not find compiled Open Next config, did you run the build command?
+```
+
+Two deploys are possible here and only one of them works from a single command.
+`npx wrangler deploy` on its own inspects the project, sees the OpenNext layout,
+and forwards to `opennextjs-cloudflare deploy`, which is a packaging-only step:
+it expects `.open-next/` to already exist from an earlier build in the same job.
+When the build step is unset, fails, or runs somewhere the deploy cannot see,
+there is nothing to package.
+
+Concretely, the deploy step loads
+`.open-next/.build/open-next.config.edge.mjs`, and only the build writes it.
+`npm run cf:deploy` runs `opennextjs-cloudflare build` and then
+`opennextjs-cloudflare deploy` in one process, so that file and the worker
+bundle always exist by the time the upload starts. Point the dashboard's deploy
+command at that script, or run `npm run cf:build` in the same job before
+`npx wrangler deploy`.
+
+If you would rather keep `npx wrangler deploy` as the deploy command and drive
+the adapter yourself, set `OPEN_NEXT_DEPLOY=1` in the build environment. Wrangler
+reads that variable before it forwards to `opennextjs-cloudflare deploy`, and a
+truthy value makes it deploy `wrangler.jsonc` directly instead.
+
 ### Building on Windows
+
 
 The OpenNext build copies Next's traced output and recreates the symlinks Next
 writes for externalized packages (`better-sqlite3`, `mammoth`, `xlsx`). Creating
