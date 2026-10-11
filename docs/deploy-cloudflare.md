@@ -107,7 +107,17 @@ the adapter yourself, set `OPEN_NEXT_DEPLOY=1` in the build environment. Wrangle
 reads that variable before it forwards to `opennextjs-cloudflare deploy`, and a
 truthy value makes it deploy `wrangler.jsonc` directly instead.
 
+This repository also covers the case where the Worker has no build command at
+all. `postinstall` runs `scripts/cf-postinstall.mjs`, which builds the OpenNext
+output inside Workers Builds (the `WORKERS_CI` variable is set there) whenever
+`.open-next/.build` is missing. Outside Cloudflare, on Windows, and when a build
+already ran, the script exits without touching anything, so local installs and
+Docker builds behave as before. The dashboard build command is still the better
+place for this work; the hook exists so that a missing build step shows up as a
+working deploy instead of an opaque one.
+
 ### Building on Windows
+
 
 
 The OpenNext build copies Next's traced output and recreates the symlinks Next
