@@ -6,3 +6,6 @@ coverage
 drizzle
 data
 playwright-report
+.open-next
+.wrangler
+.tmp

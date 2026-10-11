@@ -9,6 +9,9 @@ const eslintConfig = defineConfig([
     ".next/**",
     // The isolated dev build dir (`NEXT_DIST_DIR=.next-build`) is generated output too.
     ".next-build/**",
+    // OpenNext/Cloudflare build output (`npm run cf:build`) and wrangler state.
+    ".open-next/**",
+    ".wrangler/**",
     "out/**",
     "build/**",
     "node_modules/**",
