@@ -14,6 +14,7 @@ export const chatPatchSchema = z.object({
   topP: z.number().min(0).max(1).optional(),
   maxTokens: z.number().int().min(1).max(200000).optional(),
   thinkingBudget: z.number().int().min(0).max(131072).nullable().optional(),
+  toolsEnabled: z.array(z.string()).nullable().optional(),
   pinned: z.boolean().optional(),
   archived: z.boolean().optional(),
 });

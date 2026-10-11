@@ -144,6 +144,8 @@ export const chats = sqliteTable(
     thinkingBudget: integer("thinking_budget"),
     styleId: text("style_id").references(() => responseStyles.id, { onDelete: "set null" }),
     projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
+    // Tool names the user enabled for this chat (null = registry defaults).
+    toolsEnabled: text("tools_enabled", { mode: "json" }).$type<string[]>(),
     pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
     archived: integer("archived", { mode: "boolean" }).notNull().default(false),
     incognito: integer("incognito", { mode: "boolean" }).notNull().default(false),

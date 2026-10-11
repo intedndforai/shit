@@ -23,7 +23,7 @@ format. Requests go through your own server, so keys never reach the browser.
 | **M3** | Rich markdown/code/LaTeX/Mermaid rendering, titles, search, branching, export/import | ✅ Shipped |
 | **M4** | Files, vision, document parsing, attachments | ✅ Shipped |
 | **M5** | Artifacts panel with sandboxing and versioning | ✅ Shipped |
-| M6 | Tool calling, web search, fetch, code execution, citations | ⏳ Planned |
+| **M6** | Tool calling, web search, fetch, calculator, CSV analysis, citations | ✅ Shipped |
 | M7 | Thinking display, context meter, cost tracking, fallback + retry | ⏳ Partial (usage + cost tracking, retry/backoff) |
 | M8 | Projects, RAG, memory, styles, slash commands | ⏳ Planned |
 | M9 | MCP client, custom tools, Deep Research | ⏳ Planned |
@@ -51,6 +51,11 @@ What works today:
 - Models can wrap self-contained output in `<artifact>` tags: Conduit captures each emission as a
   version, shows it in a side panel (HTML/SVG in a sandboxed iframe, Mermaid, Markdown, or code),
   and can diff revisions. A `/artifacts` library lists everything across chats.
+- Models can call tools. Enable them per chat from the composer’s wrench menu: **web search**
+  (Tavily, Brave, Serper, or a self-hosted SearXNG — configured in Settings → Tools),
+  **fetch URL** (SSRF-guarded, text-only, 1 MB cap), a **calculator** that never uses `eval`, and
+  **CSV / table analysis**. Calls stream into the transcript as collapsible cards with their
+  output and any sources, and the model keeps working until it has an answer.
 - Light / dark / system themes and a user-selectable accent color.
 
 ## Screenshots

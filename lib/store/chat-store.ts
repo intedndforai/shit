@@ -18,6 +18,7 @@ export interface UiMessage {
   branchIndex?: number;
   siblingIndex?: number;
   siblingCount?: number;
+  citations?: { title: string; url: string }[];
 }
 
 interface ChatState {
@@ -115,6 +116,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         loading: false,
         editingId: null,
       });
+      useUIStore.getState().setPendingTools(data.chat.toolsEnabled ?? null);
     } catch (error) {
       set({
         loading: false,
@@ -148,7 +150,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
     set({ editingId: null });
     useUIStore.getState().clearAttachments();
-    await runStream(set, get, { message: parts });
+    await runStream(set, get, {
+      message: parts,
+      toolsEnabled: useUIStore.getState().pendingTools,
+    });
   },
 
   async regenerate() {
@@ -235,7 +240,12 @@ type Getter = () => ChatState;
 async function runStream(
   set: Setter,
   get: Getter,
-  payload: { message?: string | ContentPart[]; regenerate?: boolean; continueFromLeaf?: boolean }
+  payload: {
+    message?: string | ContentPart[];
+    regenerate?: boolean;
+    continueFromLeaf?: boolean;
+    toolsEnabled?: string[] | null;
+  }
 ): Promise<void> {
   const state = get();
   const controller = new AbortController();
@@ -277,6 +287,7 @@ async function runStream(
         message: payload.message,
         regenerate: payload.regenerate,
         continueFromLeaf: payload.continueFromLeaf,
+        toolsEnabled: payload.toolsEnabled,
       }),
       signal: controller.signal,
     });
@@ -427,6 +438,52 @@ function handleEvent(event: Record<string, unknown>, streamingId: string, set: S
 
   if (type === "error") {
     update((message) => ({ ...message, error: (event.message as string) ?? "Provider error." }));
+    return;
+  }
+
+  if (type === "tool_call_end") {
+    const id = event.id as string;
+    const input = event.input;
+    update((message) => ({
+      ...message,
+      content: [
+        ...message.content,
+        { kind: "tool_use", id, name: (event.name as string) ?? "tool", input, status: "running" },
+      ],
+    }));
+    return;
+  }
+
+  if (type === "tool_status") {
+    const id = event.id as string;
+    const status = event.status as "running" | "success" | "error";
+    update((message) => ({
+      ...message,
+      content: message.content.map((part) =>
+        part.kind === "tool_use" && part.id === id ? { ...part, status } : part
+      ),
+    }));
+    return;
+  }
+
+  if (type === "tool_result") {
+    const id = event.id as string;
+    const citations = Array.isArray(event.citations)
+      ? (event.citations as Array<{ title: string; url: string }>)
+      : [];
+    update((message) => ({
+      ...message,
+      content: [
+        ...message.content,
+        {
+          kind: "tool_result",
+          id,
+          output: (event.output as string) ?? "",
+          isError: Boolean(event.isError),
+        },
+      ],
+      citations: citations.length ? [...(message.citations ?? []), ...citations] : message.citations,
+    }));
   }
 }
 

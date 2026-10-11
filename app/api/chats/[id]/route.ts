@@ -28,6 +28,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
         topP: chat.topP,
         maxTokens: chat.maxTokens,
         thinkingBudget: chat.thinkingBudget,
+        toolsEnabled: chat.toolsEnabled ?? null,
         pinned: chat.pinned,
         archived: chat.archived,
         activeLeafId: chat.activeLeafId,

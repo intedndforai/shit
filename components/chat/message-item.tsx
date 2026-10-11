@@ -10,6 +10,7 @@ import { Blocks } from "lucide-react";
 import { parseArtifacts, stripArtifacts } from "@/lib/artifacts";
 import { useUIStore } from "@/lib/store/ui-store";
 import { VersionSwitcher } from "@/components/chat/version-switcher";
+import { CitationList, ToolCallList } from "@/components/chat/tool-call";
 import { useChatStore, textOf, thinkingOf, type UiMessage } from "@/lib/store/chat-store";
 
 /** One conversation turn: user bubble or rendered assistant answer. */
@@ -224,6 +225,10 @@ export function MessageItem({
       {message.streaming && text ? (
         <span className="inline-block h-4 w-[3px] animate-pulse rounded-full bg-accent align-middle" />
       ) : null}
+
+      <ToolCallList content={message.content} />
+
+      {message.citations?.length ? <CitationList citations={message.citations} /> : null}
 
       {message.error ? (
         <div className="flex items-start gap-2 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">

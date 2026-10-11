@@ -427,6 +427,84 @@ if (updated?.id) {
   );
 }
 
+// --- Milestone 6: tools ----------------------------------------------------
+
+const toolsState = await jsonFetch("/api/tools");
+check(
+  "tool catalogue is exposed",
+  toolsState.status === 200 &&
+    (toolsState.body?.specs ?? []).some((spec) => spec.name === "calculator") &&
+    (toolsState.body?.available ?? []).includes("calculator"),
+  `${toolsState.body?.specs?.length} specs`
+);
+check(
+  "web search reports that it needs configuration",
+  (toolsState.body?.specs ?? []).some((spec) => spec.name === "web_search" && spec.configured === false)
+);
+
+const toolStreamResponse = await fetch(`${appUrl}/api/chat`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    chatId,
+    message: "please calculate 21*2 for me",
+    toolsEnabled: ["calculator", "current_time"],
+  }),
+});
+
+const toolEvents = [];
+let toolStreamText = "";
+if (toolStreamResponse.ok && toolStreamResponse.body) {
+  const rdr = toolStreamResponse.body.getReader();
+  let buf = "";
+  while (true) {
+    const { done, value } = await rdr.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let index = buf.indexOf("\n\n");
+    while (index !== -1) {
+      const chunk = buf.slice(0, index).trim();
+      buf = buf.slice(index + 2);
+      index = buf.indexOf("\n\n");
+      if (!chunk.startsWith("data:")) continue;
+      const event = JSON.parse(chunk.slice(5).trim());
+      toolEvents.push(event);
+      if (event.type === "text_delta") toolStreamText += event.text;
+    }
+  }
+}
+
+const toolCallEnd = toolEvents.find(
+  (event) => event.type === "tool_call_end" && event.input && event.input.expression
+);
+check(
+  "the model's tool call reaches the stream",
+  Boolean(toolCallEnd) && toolCallEnd.input.expression.includes("21"),
+  toolCallEnd ? JSON.stringify(toolCallEnd.input) : "no tool_call_end"
+);
+
+const toolResult = toolEvents.find((event) => event.type === "tool_result");
+check(
+  "the calculator tool ran and returned 42",
+  Boolean(toolResult) && !toolResult.isError && String(toolResult.output).includes("42"),
+  toolResult ? String(toolResult.output).slice(0, 40) : "no tool_result"
+);
+
+check(
+  "the tool round-trip produced a final answer",
+  toolStreamText.includes("42"),
+  toolStreamText.slice(0, 60)
+);
+
+const afterTools = await jsonFetch(`/api/chats/${chatId}`);
+const toolParts = (afterTools.body?.messages ?? []).flatMap((message) => message.content ?? []).filter((part) => part.kind === "tool_use" || part.kind === "tool_result");
+check(
+  "tool calls and results are persisted in the transcript",
+  toolParts.filter((part) => part.kind === "tool_use").length >= 1 &&
+    toolParts.filter((part) => part.kind === "tool_result").length >= 1,
+  `${toolParts.length} tool parts`
+);
+
 const failed = results.filter((result) => !result.ok);
 console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
 process.exitCode = failed.length === 0 ? 0 : 1;

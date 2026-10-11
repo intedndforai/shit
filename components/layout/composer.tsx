@@ -1,10 +1,11 @@
 "use client";
 
 import * as React from "react";
-import { ArrowUp, Paperclip, Plus, Square } from "lucide-react";
+import { ArrowUp, Paperclip, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AttachmentChips } from "@/components/chat/attachments/attachment-chips";
+import { ToolsMenu } from "@/components/chat/tools-menu";
 import { useUIStore, type DraftAttachment } from "@/lib/store/ui-store";
 import { api } from "@/lib/api-client";
 import { cn, isMacPlatform } from "@/lib/utils";
@@ -12,7 +13,7 @@ import { cn, isMacPlatform } from "@/lib/utils";
 /**
  * Chat composer. Handles draft state, auto-grow, Escape-to-stop,
  * Cmd/Ctrl+Enter to send, and file attachments (picker, drag-and-drop, paste).
- * The tools menu arrives in M6.
+ * The tools menu toggles the built-in tool set per conversation.
  */
 export function Composer({
   onSend,
@@ -178,14 +179,7 @@ export function Composer({
             <TooltipContent>Attach text, PDF, DOCX, XLSX, or images</TooltipContent>
           </Tooltip>
 
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label="Tools and MCP servers" disabled>
-                <Plus className="size-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Tools (Milestone 6)</TooltipContent>
-          </Tooltip>
+          <ToolsMenu />
 
           <span className="ml-2 hidden text-[11px] text-muted-foreground sm:inline">
             {isMacPlatform() ? "⌘" : "Ctrl"}+Enter to send · Esc to stop

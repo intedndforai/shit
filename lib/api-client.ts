@@ -101,6 +101,7 @@ export interface ChatDetail {
     topP: number;
     maxTokens: number;
     thinkingBudget: number | null;
+    toolsEnabled: string[] | null;
     pinned: boolean;
     archived: boolean;
     activeLeafId: string | null;
@@ -147,6 +148,27 @@ export interface SearchHit {
   role: string | null;
   snippet: string;
   updatedAt: number;
+}
+
+export interface ToolSpecDto {
+  name: string;
+  label: string;
+  description: string;
+  defaultEnabled: boolean;
+  requiresConfig: boolean;
+  configured: boolean;
+  parameters: Record<string, unknown>;
+}
+
+export interface ToolsState {
+  config: {
+    webSearch: { enabled: boolean; provider: "tavily" | "brave" | "serper" | "searxng"; baseUrl?: string; maxResults: number };
+    fetch: { enabled: boolean };
+  };
+  hasSearchApiKey: boolean;
+  maskedSearchApiKey: string;
+  available: string[];
+  specs: ToolSpecDto[];
 }
 
 export const api = {
@@ -212,6 +234,9 @@ export const api = {
     return upload<{ file: UploadedFile }>("/api/files", form);
   },
   getFileUrl: (id: string) => `/api/files/${id}`,
+
+  getTools: () => request<ToolsState>("/api/tools"),
+  updateTools: (input: unknown) => request<ToolsState>("/api/tools", { method: "PATCH", body: JSON.stringify(input) }),
 
   listArtifacts: (chatId?: string) =>
     request<{ artifacts: ArtifactDto[] }>(`/api/artifacts${chatId ? `?chatId=${chatId}` : ""}`),

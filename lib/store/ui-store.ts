@@ -33,6 +33,8 @@ interface UIState {
   /* Composer */
   composerDraft: string;
   attachments: DraftAttachment[];
+  /** Tool names selected for the next message (null = registry defaults). */
+  pendingTools: string[] | null;
   /* Actions */
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
@@ -46,6 +48,7 @@ interface UIState {
   updateAttachment: (id: string, patch: Partial<DraftAttachment>) => void;
   removeAttachment: (id: string) => void;
   clearAttachments: () => void;
+  setPendingTools: (tools: string[] | null) => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -58,6 +61,7 @@ export const useUIStore = create<UIState>()(
       artifactsOpen: false,
       composerDraft: "",
       attachments: [],
+      pendingTools: null,
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       setMobileNavOpen: (mobileNavOpen) => set({ mobileNavOpen }),
@@ -76,6 +80,7 @@ export const useUIStore = create<UIState>()(
       removeAttachment: (id) =>
         set((state) => ({ attachments: state.attachments.filter((attachment) => attachment.id !== id) })),
       clearAttachments: () => set({ attachments: [] }),
+      setPendingTools: (pendingTools) => set({ pendingTools }),
     }),
     {
       name: "conduit-ui",

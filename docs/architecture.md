@@ -110,6 +110,32 @@ a chip instead) without importing server code. The panel renders HTML/SVG in an
 read Conduit's storage or DOM; React artifacts are shown as source because compiling JSX in the browser
 is still planned. Versions are diffed client-side with the `diff` package.
 
+## Tools (M6)
+
+Tools are declared once in `lib/tools/registry.ts` and exposed to the model in the provider’s own
+dialect (`tools`/JSON Schema for OpenAI-compatible APIs, `input_schema` for Anthropic). The registry
+is the single source of truth for the names sent upstream, the names the UI shows, and which
+implementations `runTool` can actually execute.
+
+| Tool | Implementation | Guard rails |
+| --- | --- | --- |
+| `calculator` | Recursive-descent parser in `lib/tools/math.ts` | No `eval`; grammar limited to numbers, `+ - * / % ^`, parentheses, and a fixed function list |
+| `fetch_url` | `lib/tools/fetch-url.ts` | DNS is resolved first and private/loopback/link-local ranges (IPv4 and IPv6) are refused; 1 MB response cap, 20k characters returned, ≤ 3 redirects |
+| `web_search` | `lib/tools/web-search.ts` | Tavily / Brave / Serper / SearXNG behind one interface; key is encrypted at rest and never sent to the browser |
+| `csv_stats` | `lib/tools/csv-stats.ts` | Character-level CSV/TSV parser (quoted fields, embedded newlines) — no dependency, no shell |
+
+Enabled tools live on the chat row (`chats.toolsEnabled`, a JSON array) and can be toggled per chat
+from the composer; `Settings → Tools` stores the search provider, endpoint, and key in
+`app_settings` (JSON values, key encrypted). When a chat has no explicit selection the defaults from
+the registry apply.
+
+The chat route runs a bounded tool loop (`MAX_TOOL_ROUNDS = 6`): it streams a provider turn, and if the
+turn ended in tool calls it executes them, appends `tool`/`tool_result` messages to the history, and
+streams another turn. Each step reaches the browser as SSE — `tool_call_start`, `tool_call_end`,
+`tool_status`, `tool_result` (with citations) — and the final transcript is persisted as ordered
+content parts (`thinking`, `text`, `tool_use`, `tool_result`), so a reloaded chat keeps the cards.
+Search results carry their URLs into `citations`, which the UI renders under the answer.
+
 ## Provider contract
 
 ```ts
@@ -157,9 +183,11 @@ forwarded. Once tokens are flowing, a retry would duplicate output, so errors ar
 - **Single-user by default.** No auth means no session to steal, and the app is meant to run on your
   machine or behind your own reverse proxy. Multi-user mode (M11) adds NextAuth, per-user providers,
   and rate limits.
-- **Known gaps before M11.** CSRF protection for state-changing routes, strict CSP/security headers,
-  DOMPurify on rendered HTML, SSRF guards for the fetch tool, upload validation, and sandboxed
-  artifact iframes are planned rather than implemented; treat the current build as local-first.
+- **Known gaps before M11.** State-changing routes have no CSRF token yet, the app sends no strict
+  CSP or security headers, and uploads are validated by MIME type and size rather than scanned.
+  Rendered markdown is already sanitized with `rehype-sanitize` and artifacts render in a sandboxed
+  iframe. Multi-user auth, per-user providers, and rate limits arrive with M11; until then treat the
+  build as local-first.
 
 ## Decisions and trade-offs
 
