@@ -1,13 +1,15 @@
 "use client";
 
 import * as React from "react";
-import { Brain, Check, Copy, RefreshCw, TriangleAlert } from "lucide-react";
+import { Brain, Check, Copy, Pencil, RefreshCw, TriangleAlert, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-import { textOf, thinkingOf, type UiMessage } from "@/lib/store/chat-store";
+import { Textarea } from "@/components/ui/textarea";
+import { MarkdownRenderer } from "@/components/markdown/markdown-renderer";
+import { VersionSwitcher } from "@/components/chat/version-switcher";
+import { useChatStore, textOf, thinkingOf, type UiMessage } from "@/lib/store/chat-store";
 
-/** One conversation turn: user bubble or assistant prose with actions. */
+/** One conversation turn: user bubble or rendered assistant answer. */
 export function MessageItem({
   message,
   isLastAssistant,
@@ -19,10 +21,19 @@ export function MessageItem({
 }) {
   const [copied, setCopied] = React.useState(false);
   const [showThinking, setShowThinking] = React.useState(false);
+  const [draft, setDraft] = React.useState("");
+
+  const editingId = useChatStore((state) => state.editingId);
+  const setEditing = useChatStore((state) => state.setEditing);
+  const editMessage = useChatStore((state) => state.editMessage);
+  const switchBranch = useChatStore((state) => state.switchBranch);
 
   const text = textOf(message);
   const thinking = thinkingOf(message);
   const isUser = message.role === "user";
+  const editing = editingId === message.id;
+  const siblingIndex = message.siblingIndex ?? 0;
+  const siblingCount = message.siblingCount ?? 1;
 
   const copy = async () => {
     try {
@@ -34,12 +45,71 @@ export function MessageItem({
     }
   };
 
+  const startEdit = () => {
+    setDraft(text);
+    setEditing(message.id);
+  };
+
+  const branchTo = (direction: "prev" | "next") => {
+    // Sibling ids are not all on the active path, so the server resolves the
+    // neighbouring version of this turn and moves the visible leaf to it.
+    void switchBranch(message.id, direction);
+  };
+
   if (isUser) {
     return (
-      <div className="flex justify-end">
-        <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-secondary px-4 py-2.5 text-[15px] leading-relaxed">
-          {text}
-        </div>
+      <div className="group flex flex-col items-end gap-1">
+        {editing ? (
+          <div className="w-full rounded-2xl border border-accent/60 bg-card p-3">
+            <Textarea
+              autoFocus
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              className="min-h-[80px] border-0 bg-transparent p-0 focus-visible:outline-none"
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                  event.preventDefault();
+                  void editMessage(message.id, draft);
+                }
+                if (event.key === "Escape") setEditing(null);
+              }}
+            />
+            <div className="mt-2 flex items-center justify-end gap-2">
+              <span className="mr-auto text-[11px] text-muted-foreground">
+                Saving creates a new branch — nothing is overwritten.
+              </span>
+              <Button variant="ghost" size="sm" onClick={() => setEditing(null)}>
+                <X className="size-3.5" />
+                Cancel
+              </Button>
+              <Button size="sm" onClick={() => void editMessage(message.id, draft)} disabled={!draft.trim()}>
+                Save and regenerate
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-secondary px-4 py-2.5 text-[15px] leading-relaxed">
+              {text}
+            </div>
+            <div className="flex items-center gap-1">
+              <VersionSwitcher
+                index={siblingIndex}
+                count={siblingCount}
+                onPrev={() => branchTo("prev")}
+                onNext={() => branchTo("next")}
+              />
+              <div className="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                <Button variant="ghost" size="icon-sm" aria-label="Copy message" onClick={copy}>
+                  {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                </Button>
+                <Button variant="ghost" size="icon-sm" aria-label="Edit message" onClick={startEdit}>
+                  <Pencil className="size-3.5" />
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     );
   }
@@ -67,7 +137,7 @@ export function MessageItem({
       ) : null}
 
       {text ? (
-        <div className="prose-serif whitespace-pre-wrap break-words">{text}</div>
+        <MarkdownRenderer content={text} />
       ) : message.streaming ? (
         <p className="text-sm text-muted-foreground">Waiting for the first token...</p>
       ) : null}
@@ -88,8 +158,8 @@ export function MessageItem({
         </div>
       ) : null}
 
-      <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-        <Button variant="ghost" size="icon-sm" aria-label="Copy message" onClick={copy}>
+      <div className="flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+        <Button variant="ghost" size="icon-sm" aria-label="Copy answer" onClick={copy}>
           {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
         </Button>
         {isLastAssistant && !message.streaming ? (
@@ -97,13 +167,19 @@ export function MessageItem({
             <RefreshCw className="size-3.5" />
           </Button>
         ) : null}
+        <VersionSwitcher
+          index={siblingIndex}
+          count={siblingCount}
+          onPrev={() => branchTo("prev")}
+          onNext={() => branchTo("next")}
+        />
         {message.usage?.totalTokens ? (
           <Badge variant="outline" className="ml-1">
             {message.usage.totalTokens} tokens
           </Badge>
         ) : null}
         {message.cost ? (
-          <Badge variant="outline" className={cn("ml-1")}>
+          <Badge variant="outline" className="ml-1">
             ${message.cost.toFixed(4)}
           </Badge>
         ) : null}

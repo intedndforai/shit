@@ -4,6 +4,7 @@ import { Toaster } from "sonner";
 import { AppFrame } from "@/components/layout/app-frame";
 import { ThemeProvider } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import "katex/dist/katex.min.css";
 import "./globals.css";
 
 const inter = Inter({

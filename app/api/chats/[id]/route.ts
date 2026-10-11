@@ -1,5 +1,6 @@
 import { jsonError, jsonOk, parseJson, errorResponse } from "@/lib/server/api";
-import { chatPatchSchema, deleteChat, getChat, listMessages, updateChat } from "@/lib/server/chats";
+import { chatPatchSchema, deleteChat, getChat, updateChat } from "@/lib/server/chats";
+import { getActivePath } from "@/lib/server/branches";
 import { findModel, getProvider } from "@/lib/server/providers";
 
 export const runtime = "nodejs";
@@ -11,24 +12,46 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     const chat = getChat(id);
     if (!chat) return jsonError("Chat not found.", 404);
 
-    const stored = listMessages(id);
     const model = chat.modelId ? findModel(chat.modelId) : undefined;
     const provider = chat.providerId ? getProvider(chat.providerId) : undefined;
-    const providerPublic = provider
-      ? { id: provider.id, name: provider.name, apiFormat: provider.apiFormat }
-      : null;
+    const path = getActivePath(id);
 
     return jsonOk({
       chat: {
-        ...chat,
+        id: chat.id,
+        title: chat.title,
+        titleSource: chat.titleSource,
+        systemPrompt: chat.systemPrompt,
+        providerId: chat.providerId,
+        modelId: chat.modelId,
+        temperature: chat.temperature,
+        topP: chat.topP,
+        maxTokens: chat.maxTokens,
+        thinkingBudget: chat.thinkingBudget,
+        pinned: chat.pinned,
+        archived: chat.archived,
+        activeLeafId: chat.activeLeafId,
         createdAt: chat.createdAt.getTime(),
         updatedAt: chat.updatedAt.getTime(),
       },
-      model: model ? { id: model.id, externalId: model.externalId, displayName: model.displayName } : null,
-      provider: providerPublic,
-      messages: stored.map((row) => ({
-        ...row,
-        createdAt: row.createdAt.getTime(),
+      model: model
+        ? { id: model.id, externalId: model.externalId, displayName: model.displayName }
+        : null,
+      provider: provider ? { id: provider.id, name: provider.name, apiFormat: provider.apiFormat } : null,
+      messages: path.map((message) => ({
+        id: message.id,
+        chatId: message.chatId,
+        role: message.role,
+        content: message.content,
+        parentId: message.parentId,
+        branchIndex: message.branchIndex,
+        siblingIndex: message.siblingIndex,
+        siblingCount: message.siblingCount,
+        modelId: message.modelId,
+        tokenUsage: message.tokenUsage,
+        cost: message.cost,
+        error: message.error,
+        createdAt: message.createdAt.getTime(),
       })),
     });
   } catch (error) {
@@ -44,7 +67,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   try {
     const chat = updateChat(id, parsed.data);
     if (!chat) return jsonError("Chat not found.", 404);
-    return jsonOk({ chat });
+    return jsonOk({ chat: { ...chat, createdAt: chat.createdAt.getTime(), updatedAt: chat.updatedAt.getTime() } });
   } catch (error) {
     return errorResponse(error);
   }

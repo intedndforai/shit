@@ -65,11 +65,47 @@ export interface ChatMessageDto {
   chatId: string;
   role: "system" | "user" | "assistant" | "tool";
   content: ContentPart[];
+  parentId: string | null;
+  branchIndex: number;
+  siblingIndex: number;
+  siblingCount: number;
   modelId: string | null;
   tokenUsage: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
   cost: number;
   error: string | null;
   createdAt: number;
+}
+
+export interface ChatDetail {
+  chat: {
+    id: string;
+    title: string | null;
+    titleSource: "auto" | "model" | "user";
+    systemPrompt: string | null;
+    providerId: string | null;
+    modelId: string | null;
+    temperature: number;
+    topP: number;
+    maxTokens: number;
+    thinkingBudget: number | null;
+    pinned: boolean;
+    archived: boolean;
+    activeLeafId: string | null;
+    createdAt: number;
+    updatedAt: number;
+  };
+  messages: ChatMessageDto[];
+  model: { id: string; externalId: string; displayName: string | null } | null;
+  provider: { id: string; name: string; apiFormat: string } | null;
+}
+
+export interface SearchHit {
+  chatId: string;
+  messageId: string | null;
+  chatTitle: string | null;
+  role: string | null;
+  snippet: string;
+  updatedAt: number;
 }
 
 export const api = {
@@ -100,11 +136,32 @@ export const api = {
   listChats: () => request<{ chats: ChatSummary[] }>("/api/chats"),
   createChat: (input: unknown) =>
     request<{ chat: { id: string } }>("/api/chats", { method: "POST", body: JSON.stringify(input) }),
-  getChat: (id: string) =>
-    request<{ chat: ChatSummary & { systemPrompt: string | null; temperature: number; topP: number; maxTokens: number }; messages: ChatMessageDto[]; model: { id: string } | null }>(
-      `/api/chats/${id}`
-    ),
+  getChat: (id: string) => request<ChatDetail>(`/api/chats/${id}`),
   updateChat: (id: string, input: unknown) =>
     request<{ chat: unknown }>(`/api/chats/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
   deleteChat: (id: string) => request<{ ok: true }>(`/api/chats/${id}`, { method: "DELETE" }),
+  generateTitle: (id: string) =>
+    request<{ title: string | null; generated: boolean }>(`/api/chats/${id}/title`, { method: "POST" }),
+
+  switchBranch: (messageId: string, direction: "prev" | "next" | "self" = "self") =>
+    request<{ ok: true; activeLeafId: string; messageId: string }>(`/api/messages/${messageId}/switch`, {
+      method: "POST",
+      body: JSON.stringify({ direction }),
+    }),
+  editMessage: (messageId: string, text: string) =>
+    request<{ ok: true; messageId: string }>(`/api/messages/${messageId}/edit`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
+
+  search: (query: string) =>
+    request<{ query: string; hits: SearchHit[] }>(`/api/search?q=${encodeURIComponent(query)}`),
+
+  importChat: (payload: unknown) =>
+    request<{ chatId: string; imported: number }>("/api/chats/import", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  exportUrl: (chatId: string, format: "md" | "json") => `/api/chats/${chatId}/export?format=${format}`,
 };

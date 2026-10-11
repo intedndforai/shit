@@ -3,8 +3,9 @@
 import { Sidebar } from "@/components/layout/sidebar";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { Topbar } from "@/components/layout/topbar";
+import { SearchDialog } from "@/components/search/search-dialog";
 
-/** Persistent application frame: sidebar rail, top bar, and page content. */
+/** Persistent application frame: sidebar rail, top bar, search, and page content. */
 export function AppFrame({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-background">
@@ -14,6 +15,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
         <Topbar />
         <main className="min-h-0 flex-1 overflow-hidden">{children}</main>
       </div>
+      <SearchDialog />
     </div>
   );
 }

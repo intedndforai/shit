@@ -88,11 +88,18 @@ export function listMessages(chatId: string) {
     .all();
 }
 
-export function updateChat(id: string, patch: ChatPatch): Chat | undefined {
+export function updateChat(
+  id: string,
+  patch: ChatPatch,
+  options: { titleSource?: "auto" | "model" | "user" } = {}
+): Chat | undefined {
   const values: Record<string, unknown> = { updatedAt: new Date() };
   for (const [key, value] of Object.entries(patch)) {
     if (value !== undefined) values[key] = value;
   }
+  // A title set through the API is a human decision unless the caller says
+  // otherwise (the title generator passes "model").
+  if (patch.title !== undefined) values.titleSource = options.titleSource ?? "user";
   return getDb().update(chats).set(values).where(eq(chats.id, id)).returning().get();
 }
 

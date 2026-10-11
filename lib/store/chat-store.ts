@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 import type { ContentPart } from "@/lib/db/schema";
-import { api, type ChatSummary } from "@/lib/api-client";
+import { api, type ChatMessageDto, type ChatSummary } from "@/lib/api-client";
 
 export interface UiMessage {
   id: string;
@@ -13,49 +13,70 @@ export interface UiMessage {
   streaming?: boolean;
   usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
   cost?: number;
+  parentId?: string | null;
+  branchIndex?: number;
+  siblingIndex?: number;
+  siblingCount?: number;
 }
 
 interface ChatState {
   chats: ChatSummary[];
   chatId: string | null;
+  chatTitle: string | null;
+  chatTitleSource: "auto" | "model" | "user";
+  chatModelLabel: string | null;
+  chatArchived: boolean;
   messages: UiMessage[];
   streaming: boolean;
   error: string | null;
   loading: boolean;
+  editingId: string | null;
 
   loadChats: () => Promise<void>;
   openChat: (id: string | null) => Promise<void>;
   send: (text: string) => Promise<void>;
   regenerate: () => Promise<void>;
+  editMessage: (id: string, text: string) => Promise<void>;
+  switchBranch: (id: string, direction?: "prev" | "next" | "self") => Promise<void>;
+  setEditing: (id: string | null) => void;
   stop: () => void;
   renameChat: (id: string, title: string) => Promise<void>;
   togglePin: (id: string) => Promise<void>;
+  toggleArchive: (id: string) => Promise<void>;
   removeChat: (id: string) => Promise<void>;
+  refreshTitle: () => Promise<void>;
 }
 
 let activeController: AbortController | null = null;
 
-function textOf(message: UiMessage): string {
-  return message.content
-    .map((part) => (part.kind === "text" ? part.text : ""))
-    .filter(Boolean)
-    .join("");
-}
-
-function thinkingOf(message: UiMessage): string {
-  return message.content
-    .map((part) => (part.kind === "thinking" ? part.text : ""))
-    .filter(Boolean)
-    .join("");
+function toUiMessage(message: ChatMessageDto): UiMessage {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    error: message.error,
+    createdAt: message.createdAt,
+    usage: message.tokenUsage,
+    cost: message.cost,
+    parentId: message.parentId,
+    branchIndex: message.branchIndex,
+    siblingIndex: message.siblingIndex,
+    siblingCount: message.siblingCount,
+  };
 }
 
 export const useChatStore = create<ChatState>()((set, get) => ({
   chats: [],
   chatId: null,
+  chatTitle: null,
+  chatTitleSource: "auto",
+  chatModelLabel: null,
+  chatArchived: false,
   messages: [],
   streaming: false,
   error: null,
   loading: false,
+  editingId: null,
 
   async loadChats() {
     try {
@@ -68,7 +89,16 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   async openChat(id) {
     if (!id) {
-      set({ chatId: null, messages: [], error: null });
+      set({
+        chatId: null,
+        chatTitle: null,
+        chatTitleSource: "auto",
+        chatModelLabel: null,
+        chatArchived: false,
+        messages: [],
+        error: null,
+        editingId: null,
+      });
       return;
     }
     set({ loading: true, error: null });
@@ -76,19 +106,19 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       const data = await api.getChat(id);
       set({
         chatId: id,
-        messages: data.messages.map((message) => ({
-          id: message.id,
-          role: message.role,
-          content: message.content,
-          error: message.error,
-          createdAt: message.createdAt,
-          usage: message.tokenUsage,
-          cost: message.cost,
-        })),
+        chatTitle: data.chat.title,
+        chatTitleSource: data.chat.titleSource,
+        chatModelLabel: data.model ? data.model.displayName ?? data.model.externalId : null,
+        chatArchived: data.chat.archived,
+        messages: data.messages.map(toUiMessage),
         loading: false,
+        editingId: null,
       });
     } catch (error) {
-      set({ loading: false, error: error instanceof Error ? error.message : "Could not open this chat." });
+      set({
+        loading: false,
+        error: error instanceof Error ? error.message : "Could not open this chat.",
+      });
     }
   },
 
@@ -101,6 +131,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   async send(text) {
     const trimmed = text.trim();
     if (!trimmed || get().streaming) return;
+    set({ editingId: null });
     await runStream(set, get, { message: trimmed });
   },
 
@@ -109,9 +140,38 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     await runStream(set, get, { regenerate: true });
   },
 
+  async editMessage(id, text) {
+    const trimmed = text.trim();
+    if (!trimmed || get().streaming) return;
+    set({ editingId: null });
+    try {
+      await api.editMessage(id, trimmed);
+      await runStream(set, get, { continueFromLeaf: true });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : "Could not save your edit." });
+    }
+  },
+
+  async switchBranch(id, direction = "self") {
+    try {
+      await api.switchBranch(id, direction);
+      const current = get().chatId;
+      if (current) await get().openChat(current);
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : "Could not switch branch." });
+    }
+  },
+
+  setEditing(id) {
+    set({ editingId: id });
+  },
+
   async renameChat(id, title) {
     await api.updateChat(id, { title });
-    set((state) => ({ chats: state.chats.map((chat) => (chat.id === id ? { ...chat, title } : chat)) }));
+    set((state) => ({
+      chats: state.chats.map((chat) => (chat.id === id ? { ...chat, title } : chat)),
+      ...(state.chatId === id ? { chatTitle: title } : {}),
+    }));
   },
 
   async togglePin(id) {
@@ -121,23 +181,45 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     await get().loadChats();
   },
 
+  async toggleArchive(id) {
+    const chat = get().chats.find((item) => item.id === id);
+    if (!chat) return;
+    await api.updateChat(id, { archived: !chat.archived });
+    await get().loadChats();
+  },
+
   async removeChat(id) {
     await api.deleteChat(id);
     set((state) => ({
       chats: state.chats.filter((chat) => chat.id !== id),
-      ...(state.chatId === id ? { chatId: null, messages: [] } : {}),
+      ...(state.chatId === id ? { chatId: null, chatTitle: null, messages: [] } : {}),
     }));
+  },
+
+  async refreshTitle() {
+    const id = get().chatId;
+    if (!id) return;
+    try {
+      const { title } = await api.generateTitle(id);
+      if (!title) return;
+      set((state) => ({
+        chatTitle: title,
+        chatTitleSource: "model",
+        chats: state.chats.map((chat) => (chat.id === id ? { ...chat, title } : chat)),
+      }));
+    } catch {
+      /* titles are best-effort */
+    }
   },
 }));
 
 type Setter = (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void;
 type Getter = () => ChatState;
 
-/** Shared streaming routine used by both send and regenerate. */
 async function runStream(
   set: Setter,
   get: Getter,
-  payload: { message?: string; regenerate?: boolean }
+  payload: { message?: string; regenerate?: boolean; continueFromLeaf?: boolean }
 ): Promise<void> {
   const state = get();
   const controller = new AbortController();
@@ -161,9 +243,8 @@ async function runStream(
     streaming: true,
   };
 
-  const base = payload.regenerate ? dropLastAssistant(state.messages) : state.messages;
   set({
-    messages: [...(optimisticUser ? [...base, optimisticUser] : base), streamingMessage],
+    messages: [...state.messages, ...(optimisticUser ? [optimisticUser] : []), streamingMessage],
     streaming: true,
     error: null,
   });
@@ -176,6 +257,7 @@ async function runStream(
         chatId: get().chatId,
         message: payload.message,
         regenerate: payload.regenerate,
+        continueFromLeaf: payload.continueFromLeaf,
       }),
       signal: controller.signal,
     });
@@ -194,6 +276,7 @@ async function runStream(
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let assistantId: string | null = null;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -205,12 +288,29 @@ async function runStream(
         const chunk = buffer.slice(0, index).trim();
         buffer = buffer.slice(index + 2);
         index = buffer.indexOf("\n\n");
-
         if (!chunk.startsWith("data:")) continue;
+
         const event = JSON.parse(chunk.slice(5).trim()) as Record<string, unknown>;
+        if (event.type === "message_ids" && typeof event.assistantMessageId === "string") {
+          assistantId = event.assistantMessageId;
+        }
         handleEvent(event, streamingId, set, get);
       }
     }
+
+    // Reconcile with the server (real ids, branch metadata) once the stream ends.
+    const chatId = get().chatId;
+    if (chatId) {
+      const data = await api.getChat(chatId);
+      set({
+        messages: data.messages.map(toUiMessage),
+        chatTitle: data.chat.title,
+        chatTitleSource: data.chat.titleSource,
+        chatModelLabel: data.model ? data.model.displayName ?? data.model.externalId : null,
+        chatArchived: data.chat.archived,
+      });
+    }
+    void assistantId;
   } catch (error) {
     const aborted = controller.signal.aborted;
     if (!aborted) {
@@ -221,6 +321,16 @@ async function runStream(
           item.id === streamingId ? { ...item, error: message, streaming: false } : item
         ),
       }));
+    } else {
+      const chatId = get().chatId;
+      if (chatId) {
+        try {
+          const data = await api.getChat(chatId);
+          set({ messages: data.messages.map(toUiMessage) });
+        } catch {
+          /* keep the partial stream on screen */
+        }
+      }
     }
   } finally {
     activeController = null;
@@ -231,30 +341,29 @@ async function runStream(
       ),
     }));
     await get().loadChats();
-  }
-}
 
-function dropLastAssistant(messagesList: UiMessage[]): UiMessage[] {
-  const copy = [...messagesList];
-  for (let i = copy.length - 1; i >= 0; i -= 1) {
-    if (copy[i].role === "assistant") {
-      copy.splice(i, 1);
-      break;
+    const state2 = get();
+    // A placeholder title is replaced once the first answer exists, unless the
+    // user renamed the chat or a title model already ran.
+    if (state2.chatId && state2.chatTitleSource === "auto") {
+      void state2.refreshTitle();
+    }
+    if (!state2.chatId) {
+      // A brand new chat was created server-side; pick it up.
+      const chats = state2.chats;
+      if (chats.length) {
+        await state2.openChat(chats[0].id);
+      }
     }
   }
-  return copy;
 }
 
-function handleEvent(
-  event: Record<string, unknown>,
-  streamingId: string,
-  set: Setter,
-  get: Getter
-): void {
+function handleEvent(event: Record<string, unknown>, streamingId: string, set: Setter, get: Getter): void {
   const type = event.type as string;
 
   if (type === "chat") {
-    set({ chatId: (event.chatId as string) ?? get().chatId });
+    const chatId = (event.chatId as string) ?? get().chatId;
+    set({ chatId, chatTitle: (event.title as string) ?? get().chatTitle });
     return;
   }
 
@@ -302,4 +411,16 @@ function handleEvent(
   }
 }
 
-export { textOf, thinkingOf };
+export function textOf(message: UiMessage): string {
+  return message.content
+    .map((part) => (part.kind === "text" ? part.text : ""))
+    .filter(Boolean)
+    .join("");
+}
+
+export function thinkingOf(message: UiMessage): string {
+  return message.content
+    .map((part) => (part.kind === "thinking" ? part.text : ""))
+    .filter(Boolean)
+    .join("");
+}

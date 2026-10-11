@@ -20,7 +20,7 @@ format. Requests go through your own server, so keys never reach the browser.
 | --- | --- | --- |
 | **M1** | Scaffold, design system, layout, theming, DB schema, single-user mode | ✅ Shipped |
 | **M2** | Provider settings, OpenAI-compatible + Anthropic adapters, streaming chat, stop/regenerate, persistence | ✅ Shipped |
-| M3 | Rich markdown/code/LaTeX/Mermaid rendering, titles, search, branching, export | ⏳ Planned |
+| **M3** | Rich markdown/code/LaTeX/Mermaid rendering, titles, search, branching, export/import | ✅ Shipped |
 | M4 | Files, vision, document parsing, attachments | ⏳ Planned |
 | M5 | Artifacts panel with sandboxing and versioning | ⏳ Planned |
 | M6 | Tool calling, web search, fetch, code execution, citations | ⏳ Planned |
@@ -37,7 +37,14 @@ What works today:
 - Auto-discover models from `GET {baseUrl}/models` plus manual per-model settings (context window,
   max output, capability flags, price per million tokens, default/fallback flags).
 - Stream a conversation token by token (SSE), with **Stop**, **Regenerate**, usage, and cost per answer.
-- Histories persist to SQLite; the sidebar lists, pins, renames, and deletes chats.
+- Histories persist to SQLite; the sidebar lists, pins, renames, archives, exports, and deletes chats.
+- Answers render GitHub-flavoured Markdown with syntax-highlighted code (copy + wrap), KaTeX math,
+  and Mermaid diagrams that only load when a diagram is actually present.
+- Every turn is a node in a message tree: edit a user message or regenerate an answer and Conduit
+  keeps both versions, with an inline "1/2" switcher. Nothing is overwritten.
+- `Ctrl`/`Cmd`+`K` searches chat titles and message bodies with highlighted snippets.
+- Chats auto-title themselves once the first answer exists, and can be exported or imported as
+  Markdown or JSON.
 - Light / dark / system themes and a user-selectable accent color.
 
 ## Screenshots

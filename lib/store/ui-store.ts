@@ -12,6 +12,8 @@ interface UIState {
   mobileNavOpen: boolean;
   /* Appearance */
   accent: Accent;
+  /* Overlays */
+  searchOpen: boolean;
   /* Composer */
   composerDraft: string;
   /* Actions */
@@ -19,6 +21,7 @@ interface UIState {
   setSidebarCollapsed: (collapsed: boolean) => void;
   setMobileNavOpen: (open: boolean) => void;
   setAccent: (accent: Accent) => void;
+  setSearchOpen: (open: boolean) => void;
   setComposerDraft: (draft: string) => void;
 }
 
@@ -28,11 +31,13 @@ export const useUIStore = create<UIState>()(
       sidebarCollapsed: false,
       mobileNavOpen: false,
       accent: "amber",
+      searchOpen: false,
       composerDraft: "",
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       setMobileNavOpen: (mobileNavOpen) => set({ mobileNavOpen }),
       setAccent: (accent) => set({ accent }),
+      setSearchOpen: (searchOpen) => set({ searchOpen }),
       setComposerDraft: (composerDraft) => set({ composerDraft }),
     }),
     {
