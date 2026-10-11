@@ -24,7 +24,7 @@ format. Requests go through your own server, so keys never reach the browser.
 | **M4** | Files, vision, document parsing, attachments | ✅ Shipped |
 | **M5** | Artifacts panel with sandboxing and versioning | ✅ Shipped |
 | **M6** | Tool calling, web search, fetch, calculator, CSV analysis, citations | ✅ Shipped |
-| M7 | Thinking display, context meter, cost tracking, fallback + retry | ⏳ Partial (usage + cost tracking, retry/backoff) |
+| **M7** | Thinking display, context meter, cost tracking, fallback + retry | ✅ Shipped |
 | M8 | Projects, RAG, memory, styles, slash commands | ⏳ Planned |
 | M9 | MCP client, custom tools, Deep Research | ⏳ Planned |
 | M10 | Voice, accessibility, PWA, shortcuts, mobile polish | ⏳ Planned |
@@ -57,6 +57,16 @@ What works today:
   **CSV / table analysis**. Runs Python and JavaScript too, in your browser with your approval.
   Tool calls stream into the transcript as collapsible cards with their output and any sources,
   and the model keeps working until it has an answer.
+- Extended thinking shows up as a collapsible panel with a live timer and the final duration, and
+  a per-chat thinking-budget slider where the model supports it.
+- A context meter above the composer estimates how much of the model's window the conversation
+  uses, totals what it has cost, and offers **Free context**: the oldest turns become one summary
+  node (with a summarization model) or get trimmed when none is configured. Message history is
+  kept in the tree, so nothing is lost.
+- Generation controls per chat: temperature, top_p, max output, thinking budget, and a system
+  prompt, with presets you can save in Settings.
+- Requests retry on 429/5xx with exponential backoff, and a model you mark as the **fallback**
+  takes over automatically when the chosen one is unreachable — the transcript says so.
 - Light / dark / system themes and a user-selectable accent color.
 
 ## Screenshots

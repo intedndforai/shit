@@ -12,7 +12,13 @@ import {
   updateMessage,
 } from "@/lib/server/chats";
 import { getActivePath, lastUserMessage, nextBranchIndex, setActiveLeaf } from "@/lib/server/branches";
-import { connectionFromProvider, findModel, getDefaultModel, getProvider } from "@/lib/server/providers";
+import {
+  connectionFromProvider,
+  fallbackModelFor,
+  findModel,
+  getDefaultModel,
+  getProvider,
+} from "@/lib/server/providers";
 import { recordArtifacts } from "@/lib/server/artifacts";
 import { resolveToolNames, runTool, toolDefinitions, toolSpec, type ToolCitation } from "@/lib/tools/registry";
 import { readToolsConfig } from "@/lib/tools/web-search";
@@ -84,6 +90,7 @@ type OutgoingEvent =
   | StreamEvent
   | { type: "chat"; chatId: string; title: string | null }
   | { type: "message_ids"; assistantMessageId: string }
+  | { type: "model_switch"; modelLabel: string; reason?: string }
   | { type: "tool_status"; id: string; name: string; status: "running" | "success" | "error" }
   | {
       type: "tool_approval";
@@ -121,13 +128,18 @@ export async function POST(request: Request) {
   let chat = body.chatId ? getChat(body.chatId) : undefined;
   if (body.chatId && !chat) return jsonError("Chat not found.", 404);
 
-  const model = body.modelId ? findModel(body.modelId) : getDefaultModel();
-  if (!model) {
+  // A chat stays on its own model once it has one; the body may override it.
+  const requestedModelId = body.modelId ?? chat?.modelId ?? null;
+  const initialModel = (requestedModelId ? findModel(requestedModelId) : undefined) ?? getDefaultModel();
+  if (!initialModel) {
     return jsonError("No model is configured. Add a provider and a model in Settings before chatting.", 409);
   }
+  let model: typeof initialModel = initialModel;
 
-  const provider = getProvider(body.providerId ?? model.providerId);
-  if (!provider) return jsonError("The provider for this model no longer exists.", 409);
+  const initialProvider = getProvider(body.providerId ?? initialModel.providerId);
+  if (!initialProvider) return jsonError("The provider for this model no longer exists.", 409);
+  let provider: typeof initialProvider = initialProvider;
+
 
   if (!chat) {
     chat = createChat({
@@ -194,8 +206,14 @@ export async function POST(request: Request) {
     chat.systemPrompt ??
     "You are a helpful assistant inside Conduit, a self-hosted chat client. Use the tools you are given when they help, and cite any URLs you rely on.";
 
-  const adapter = getAdapter(provider.apiFormat as never);
-  const connection = connectionFromProvider(provider);
+  // Snapshotted for the stream closure: the fallback path may change the chat.
+  const initialTitle = chat.title;
+  const settings = {
+    temperature: chat.temperature,
+    topP: chat.topP,
+    maxTokens: chat.maxTokens,
+    thinkingBudget: chat.thinkingBudget ?? undefined,
+  };
 
   // Tools are offered only when the model is not explicitly marked as
   // tool-incapable, and only for tools the user has configured.
@@ -227,8 +245,34 @@ export async function POST(request: Request) {
       const timeline: ContentPart[] = [];
       let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
       let errored: string | null = null;
+      let usedFallback = false;
+      let reasoningStartedAt = 0;
+      let reasoningEndedAt = 0;
+      const history = [...historyForModel];
 
       const send = (event: OutgoingEvent) => controller.enqueue(encoder.encode(sseEncode(event)));
+
+      /** Streams one provider turn and buffers the events (a fallback may need a retry). */
+      const streamTurn = async (activeModel: typeof model, activeProvider: typeof provider) => {
+        const adapter = getAdapter(activeProvider.apiFormat as never);
+        const connection = connectionFromProvider(activeProvider);
+        const events: StreamEvent[] = [];
+        for await (const event of adapter.stream({
+          ...connection,
+          model: activeModel.externalId,
+          system: systemPrompt,
+          messages: history,
+          temperature: body.temperature ?? settings.temperature,
+          topP: body.topP ?? settings.topP,
+          maxTokens: body.maxTokens ?? settings.maxTokens,
+          thinkingBudget: body.thinkingBudget ?? settings.thinkingBudget,
+          tools,
+          signal: ac.signal,
+        })) {
+          events.push(event);
+        }
+        return events;
+      };
 
       const pushText = (delta: string) => {
         const last = timeline[timeline.length - 1];
@@ -236,11 +280,10 @@ export async function POST(request: Request) {
         else timeline.push({ kind: "text", text: delta });
       };
 
-      send({ type: "chat", chatId, title: chat.title });
+      send({ type: "chat", chatId, title: initialTitle });
       send({ type: "message_ids", assistantMessageId: assistantRow.id });
 
       try {
-        const history = [...historyForModel];
         let round = 0;
 
         while (round < MAX_TOOL_ROUNDS) {
@@ -248,19 +291,37 @@ export async function POST(request: Request) {
           const pending = new Map<string, { name: string; input: unknown; args: string }>();
           const roundText: string[] = [];
 
-          for await (const event of adapter.stream({
-            ...connection,
-            model: model.externalId,
-            system: systemPrompt,
-            messages: history,
-            temperature: body.temperature ?? chat.temperature,
-            topP: body.topP ?? chat.topP,
-            maxTokens: body.maxTokens ?? chat.maxTokens,
-            thinkingBudget: body.thinkingBudget ?? chat.thinkingBudget ?? undefined,
-            tools,
-            signal: ac.signal,
-          })) {
+          let roundEvents: StreamEvent[];
+          try {
+            roundEvents = await streamTurn(model, provider);
+          } catch (error) {
+            const fallback = fallbackModelFor(model);
+            const canFallback =
+              Boolean(fallback) &&
+              !usedFallback &&
+              !ac.signal.aborted &&
+              error instanceof ProviderError &&
+              error.retryable;
+            if (!canFallback || !fallback) throw error;
+
+            const fallbackProvider = getProvider(fallback.providerId);
+            if (!fallbackProvider) throw error;
+
+            usedFallback = true;
+            send({
+              type: "model_switch",
+              modelLabel: fallback.displayName ?? fallback.externalId,
+              reason: error.message,
+            });
+            model = fallback;
+            provider = fallbackProvider;
+            chat = updateChat(chatId, { modelId: fallback.id, providerId: fallbackProvider.id }) ?? chat;
+            roundEvents = await streamTurn(model, provider);
+          }
+
+          for (const event of roundEvents) {
             if (event.type === "text_delta") {
+              if (reasoningStartedAt && !reasoningEndedAt) reasoningEndedAt = Date.now();
               roundText.push(event.text);
               textParts.push(event.text);
               pushText(event.text);
@@ -269,6 +330,7 @@ export async function POST(request: Request) {
             }
             if (event.type === "reasoning_delta") {
               reasoningParts.push(event.text);
+              if (!reasoningStartedAt) reasoningStartedAt = Date.now();
               send(event);
               continue;
             }
@@ -408,7 +470,14 @@ export async function POST(request: Request) {
         request.signal.removeEventListener("abort", onAbort);
 
         const content: ContentPart[] = [];
-        if (reasoningParts.length) content.push({ kind: "thinking", text: reasoningParts.join("") });
+        if (reasoningParts.length) {
+          const endedAt = reasoningEndedAt || Date.now();
+          content.push({
+            kind: "thinking",
+            text: reasoningParts.join(""),
+            durationMs: reasoningStartedAt ? Math.max(0, endedAt - reasoningStartedAt) : undefined,
+          });
+        }
         content.push(...timeline);
 
         const promptTokens = usage.promptTokens ?? 0;

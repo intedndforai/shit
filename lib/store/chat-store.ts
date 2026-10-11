@@ -28,6 +28,19 @@ interface ChatState {
   chatTitleSource: "auto" | "model" | "user";
   chatModelLabel: string | null;
   chatArchived: boolean;
+  /** Model window and pricing, for the context meter and cost estimates. */
+  chatContextWindow: number;
+  chatPricing: { input: number; output: number };
+  chatReasoningCapable: boolean;
+  chatFallbackId: string | null;
+  /** Per-chat generation controls (M7). */
+  chatTemperature: number;
+  chatTopP: number;
+  chatMaxTokens: number;
+  chatThinkingBudget: number | null;
+  chatSystemPrompt: string | null;
+  /** Set when a retry had to fall back to another model. */
+  modelNote: string | null;
   messages: UiMessage[];
   streaming: boolean;
   error: string | null;
@@ -47,6 +60,14 @@ interface ChatState {
   toggleArchive: (id: string) => Promise<void>;
   removeChat: (id: string) => Promise<void>;
   refreshTitle: () => Promise<void>;
+  updateChatSettings: (patch: {
+    temperature?: number;
+    topP?: number;
+    maxTokens?: number;
+    thinkingBudget?: number | null;
+    systemPrompt?: string | null;
+  }) => Promise<void>;
+  summarize: (mode?: "auto" | "summarize" | "truncate") => Promise<string | null>;
 }
 
 let activeController: AbortController | null = null;
@@ -74,6 +95,16 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   chatTitleSource: "auto",
   chatModelLabel: null,
   chatArchived: false,
+  chatContextWindow: 128000,
+  chatPricing: { input: 0, output: 0 },
+  chatReasoningCapable: false,
+  chatFallbackId: null,
+  chatTemperature: 0.7,
+  chatTopP: 1,
+  chatMaxTokens: 8192,
+  chatThinkingBudget: null,
+  chatSystemPrompt: null,
+  modelNote: null,
   messages: [],
   streaming: false,
   error: null,
@@ -97,6 +128,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         chatTitleSource: "auto",
         chatModelLabel: null,
         chatArchived: false,
+        modelNote: null,
         messages: [],
         error: null,
         editingId: null,
@@ -112,6 +144,18 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         chatTitleSource: data.chat.titleSource,
         chatModelLabel: data.model ? data.model.displayName ?? data.model.externalId : null,
         chatArchived: data.chat.archived,
+        chatContextWindow: data.model?.contextWindow ?? 128000,
+        chatPricing: {
+          input: data.model?.pricePerMillionInput ?? 0,
+          output: data.model?.pricePerMillionOutput ?? 0,
+        },
+        chatReasoningCapable: Boolean(data.model?.reasoningCapable),
+        chatFallbackId: data.model?.fallbackId ?? null,
+        chatTemperature: data.chat.temperature,
+        chatTopP: data.chat.topP,
+        chatMaxTokens: data.chat.maxTokens,
+        chatThinkingBudget: data.chat.thinkingBudget,
+        chatSystemPrompt: data.chat.systemPrompt,
         messages: data.messages.map(toUiMessage),
         loading: false,
         editingId: null,
@@ -218,6 +262,39 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     }));
   },
 
+  async updateChatSettings(patch) {
+    const id = get().chatId;
+    set(() => ({
+      ...(patch.temperature !== undefined ? { chatTemperature: patch.temperature } : {}),
+      ...(patch.topP !== undefined ? { chatTopP: patch.topP } : {}),
+      ...(patch.maxTokens !== undefined ? { chatMaxTokens: patch.maxTokens } : {}),
+      ...(patch.thinkingBudget !== undefined ? { chatThinkingBudget: patch.thinkingBudget } : {}),
+      ...(patch.systemPrompt !== undefined ? { chatSystemPrompt: patch.systemPrompt } : {}),
+    }));
+    if (!id) return;
+    try {
+      await api.updateChat(id, patch);
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : "Could not save the chat settings." });
+    }
+  },
+
+  async summarize(mode = "auto") {
+    const id = get().chatId;
+    if (!id) return null;
+    try {
+      const result = await api.summarizeChat(id, mode);
+      await get().openChat(id);
+      if (result.mode === "noop") return null;
+      return result.mode === "summarized"
+        ? `Summarized ${result.removed} earlier messages.`
+        : `Trimmed ${result.removed} earlier messages.`;
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : "Could not manage the context." });
+      return null;
+    }
+  },
+
   async refreshTitle() {
     const id = get().chatId;
     if (!id) return;
@@ -277,6 +354,7 @@ async function runStream(
     messages: [...state.messages, ...(optimisticUser ? [optimisticUser] : []), streamingMessage],
     streaming: true,
     error: null,
+    modelNote: null,
   });
 
   try {
@@ -434,6 +512,12 @@ function handleEvent(event: Record<string, unknown>, streamingId: string, set: S
 
   if (type === "usage") {
     update((message) => ({ ...message, usage: event.usage as UiMessage["usage"] }));
+    return;
+  }
+
+  if (type === "model_switch") {
+    const label = (event.modelLabel as string) ?? "the fallback model";
+    set({ modelNote: `The chosen model failed, so Conduit retried with ${label}.` });
     return;
   }
 

@@ -138,6 +138,20 @@ function buildFrames(body) {
     };
   }
 
+  // "think" asks for a reasoning trace first, so the Thinking panel has something to show.
+  if (/think|reason/i.test(question)) {
+    const reply = plainReply(question);
+    return {
+      frames: [
+        ..."Let me work through the question step by step.".split(" ").map((word, index) => ({
+          reasoning_content: `${index === 0 ? "" : " "}${word}`,
+        })),
+        ...reply.split(" ").map((word, index) => ({ content: `${index === 0 ? "" : " "}${word}` })),
+      ],
+      text: reply,
+    };
+  }
+
   const text = /artifact/i.test(question) ? artifactReply(question) : plainReply(question);
   return {
     frames: text.split(" ").map((word, index) => ({ content: `${index === 0 ? "" : " "}${word}` })),
@@ -179,7 +193,12 @@ const server = createServer((req, res) => {
       const timer = setInterval(() => {
         if (index < frames.length) {
           const frame = frames[index];
-          const delta = frame.content !== undefined ? { content: frame.content } : { tool_calls: frame.tool_calls };
+          const delta =
+            frame.reasoning_content !== undefined
+              ? { reasoning_content: frame.reasoning_content }
+              : frame.content !== undefined
+                ? { content: frame.content }
+                : { tool_calls: frame.tool_calls };
           const chunk = {
             id: "chatcmpl-mock",
             object: "chat.completion.chunk",

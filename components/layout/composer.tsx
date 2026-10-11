@@ -5,6 +5,7 @@ import { ArrowUp, Paperclip, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AttachmentChips } from "@/components/chat/attachments/attachment-chips";
+import { ChatControls } from "@/components/chat/chat-controls";
 import { ToolsMenu } from "@/components/chat/tools-menu";
 import { useUIStore, type DraftAttachment } from "@/lib/store/ui-store";
 import { api } from "@/lib/api-client";
@@ -180,6 +181,8 @@ export function Composer({
           </Tooltip>
 
           <ToolsMenu />
+
+          <ChatControls />
 
           <span className="ml-2 hidden text-[11px] text-muted-foreground sm:inline">
             {isMacPlatform() ? "⌘" : "Ctrl"}+Enter to send · Esc to stop

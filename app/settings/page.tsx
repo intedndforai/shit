@@ -4,6 +4,7 @@ import { AccentPicker } from "@/components/accent-picker";
 import { PageShell } from "@/components/layout/page-shell";
 import { ProviderManager } from "@/components/settings/provider-manager";
 import { ToolsManager } from "@/components/settings/tools-manager";
+import { PresetsManager } from "@/components/settings/presets-manager";
 import { ThemeSelect } from "@/components/settings/theme-select";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -53,6 +54,8 @@ export default function SettingsPage() {
       <ProviderManager />
 
       <ToolsManager />
+
+      <PresetsManager />
 
       <Card>
         <CardHeader>

@@ -109,7 +109,17 @@ export interface ChatDetail {
     updatedAt: number;
   };
   messages: ChatMessageDto[];
-  model: { id: string; externalId: string; displayName: string | null } | null;
+  model: {
+    id: string;
+    externalId: string;
+    displayName: string | null;
+    contextWindow: number;
+    maxOutputTokens: number;
+    pricePerMillionInput: number;
+    pricePerMillionOutput: number;
+    reasoningCapable: boolean;
+    fallbackId: string | null;
+  } | null;
   provider: { id: string; name: string; apiFormat: string } | null;
 }
 
@@ -175,6 +185,16 @@ export interface ToolsState {
   specs: ToolSpecDto[];
 }
 
+export interface StoredPreset {
+  id: string;
+  name: string;
+  temperature: number;
+  topP: number;
+  maxTokens: number;
+  thinkingBudget: number | null;
+  systemPrompt?: string | null;
+}
+
 export const api = {
   listProviders: () => request<{ providers: PublicProvider[] }>("/api/providers"),
   createProvider: (input: unknown) =>
@@ -207,6 +227,11 @@ export const api = {
   updateChat: (id: string, input: unknown) =>
     request<{ chat: unknown }>(`/api/chats/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
   deleteChat: (id: string) => request<{ ok: true }>(`/api/chats/${id}`, { method: "DELETE" }),
+  summarizeChat: (id: string, mode: "auto" | "summarize" | "truncate" = "auto") =>
+    request<{ mode: "summarized" | "truncated" | "noop"; removed: number; kept: number; reason?: string }>(
+      `/api/chats/${id}/summarize`,
+      { method: "POST", body: JSON.stringify({ mode }) }
+    ),
   generateTitle: (id: string) =>
     request<{ title: string | null; generated: boolean }>(`/api/chats/${id}/title`, { method: "POST" }),
 
@@ -238,6 +263,10 @@ export const api = {
     return upload<{ file: UploadedFile }>("/api/files", form);
   },
   getFileUrl: (id: string) => `/api/files/${id}`,
+
+  listPresets: () => request<{ presets: StoredPreset[] }>("/api/presets"),
+  savePresets: (presets: StoredPreset[]) =>
+    request<{ presets: StoredPreset[] }>("/api/presets", { method: "PUT", body: JSON.stringify({ presets }) }),
 
   postToolResult: (input: { id: string; decision?: "run" | "deny"; output?: string; isError?: boolean }) =>
     request<{ ok: true }>("/api/chat/tool-result", { method: "POST", body: JSON.stringify(input) }),

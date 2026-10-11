@@ -150,6 +150,27 @@ timeouts (10 minutes) and stream aborts resolve the wait so the model can answer
 Python timeouts (5 minutes in the runner) terminate the worker; the next run downloads the runtime
 again, which is why warm-up happens lazily.
 
+## Context, cost, and fallback (M7)
+
+Token accounting is deliberately approximate and shared: `lib/tokens.ts` estimates ~4 characters per
+token (more for non-ASCII), bills images at a flat rate, and is used by the client context meter, the
+per-message badges, and the server-side summarizer. When a provider reports real usage, that wins;
+the meter prefers reported cost over the estimate.
+
+`POST /api/chats/:id/summarize` compresses the active path. It keeps the oldest user message as the
+anchor and the last four messages intact, asks the provider flagged as the **summarization model** to
+condense everything in between, and inserts the result as a `system` node whose child is the surviving
+tail. Replaced rows stay in the tree under the anchor, so branches still work and nothing is deleted;
+with no summarization model configured the same operation simply truncates with a note.
+
+Retries live in `lib/providers/http.ts`: 429/5xx and network failures back off (0.5s, 1s) and respect
+`Retry-After`, and they only ever happen before the first byte reaches the client. If the retries are
+exhausted and a model is flagged `isFallback`, the chat route re-runs the turn once through
+`fallbackModelFor` (preferring a fallback on the same provider), streams a `model_switch` event so the
+transcript can explain itself, and repoints the chat at the model that answered.
+
+A chat keeps the model it was created with; the request body can override it per turn.
+
 ## Provider contract
 
 ```ts

@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { models, providerFormats, providers, type Provider } from "@/lib/db/schema";
@@ -234,6 +234,21 @@ export function setDefaultModel(modelId: string) {
   db.update(models).set({ isDefault: false }).run();
   db.update(models).set({ isDefault: true }).where(eq(models.id, modelId)).run();
   return model;
+}
+
+/** The configured fallback model (models with isFallback), preferring the default provider. */
+export function fallbackModelFor(current: { id: string; providerId: string }) {
+  const rows = getDb()
+    .select()
+    .from(models)
+    .where(eq(models.isFallback, true))
+    .orderBy(desc(models.isDefault), asc(models.createdAt))
+    .all();
+  return (
+    rows.find((row) => row.id !== current.id && row.providerId === current.providerId) ??
+    rows.find((row) => row.id !== current.id) ??
+    undefined
+  );
 }
 
 export function getDefaultModel() {

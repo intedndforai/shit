@@ -1,3 +1,5 @@
+import { createServer } from "node:http";
+
 /**
  * End-to-end smoke test for Milestone 2.
  *
@@ -634,6 +636,220 @@ check(
   Boolean(convertResult) && !convertResult.isError && String(convertResult.output).includes("42.16"),
   convertResult ? String(convertResult.output).slice(0, 40) : "no tool_result"
 );
+
+// --- Milestone 7: thinking, context management, presets, fallback ----------
+
+const reasoningChat = await jsonFetch("/api/chats", {
+  method: "POST",
+  body: JSON.stringify({ title: "Reasoning round-trip" }),
+});
+const reasoningChatId = reasoningChat.body?.chat?.id;
+const reasoningResponse = await fetch(`${appUrl}/api/chat`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ chatId: reasoningChatId, message: "think about 2+2 for me" }),
+});
+const reasoningEvents = [];
+let reasoningText = "";
+if (reasoningResponse.ok && reasoningResponse.body) {
+  const reader = reasoningResponse.body.getReader();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let index = buf.indexOf("\n\n");
+    while (index !== -1) {
+      const chunk = buf.slice(0, index).trim();
+      buf = buf.slice(index + 2);
+      index = buf.indexOf("\n\n");
+      if (!chunk.startsWith("data:")) continue;
+      const event = JSON.parse(chunk.slice(5).trim());
+      reasoningEvents.push(event);
+      if (event.type === "reasoning_delta") reasoningText += event.text;
+    }
+  }
+}
+check(
+  "reasoning deltas stream to the browser",
+  reasoningText.includes("step by step"),
+  reasoningText.slice(0, 40)
+);
+
+const reasoningTranscript = await jsonFetch(`/api/chats/${reasoningChatId}`);
+const reasoningMessage = (reasoningTranscript.body?.messages ?? []).find(
+  (message) => message.role === "assistant" && (message.content ?? []).some((part) => part.kind === "thinking")
+);
+const thinkingPart = (reasoningMessage?.content ?? []).find((part) => part.kind === "thinking");
+check(
+  "the thinking block persists with its duration",
+  Boolean(thinkingPart) && typeof thinkingPart.durationMs === "number",
+  thinkingPart ? `${thinkingPart.durationMs}ms` : "no thinking part"
+);
+check(
+  "the chat detail exposes the model window for the context meter",
+  (reasoningTranscript.body?.model?.contextWindow ?? 0) > 0 &&
+    "fallbackId" in (reasoningTranscript.body?.model ?? {}),
+  `window ${reasoningTranscript.body?.model?.contextWindow}, fallback ${reasoningTranscript.body?.model?.fallbackId}`
+);
+
+// Context management: several turns, then compress.
+const summarizeChat = await jsonFetch("/api/chats", {
+  method: "POST",
+  body: JSON.stringify({ title: "Context management" }),
+});
+const summarizeChatId = summarizeChat.body?.chat?.id;
+for (const prompt of ["first question about rivers", "second question about mountains", "third question about deserts", "fourth question about oceans"]) {
+  const stream = await fetch(`${appUrl}/api/chat`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ chatId: summarizeChatId, message: prompt }),
+  });
+  if (stream.body) {
+    const reader = stream.body.getReader();
+    while (true) {
+      const { done } = await reader.read();
+      if (done) break;
+    }
+  }
+}
+
+const beforeSummarize = await jsonFetch(`/api/chats/${summarizeChatId}`);
+const contextBeforeCount = (beforeSummarize.body?.messages ?? []).length;
+const summarizedResult = await jsonFetch(`/api/chats/${summarizeChatId}/summarize`, {
+  method: "POST",
+  body: JSON.stringify({ mode: "truncate" }),
+});
+check(
+  "context compression replaces the oldest turns with one summary node",
+  summarizedResult.status === 200 && summarizedResult.body?.mode === "truncated" && summarizedResult.body?.removed >= 2,
+  `${summarizedResult.body?.removed} replaced, ${summarizedResult.body?.kept} kept`
+);
+
+const afterSummarize = await jsonFetch(`/api/chats/${summarizeChatId}`);
+const afterMessages = afterSummarize.body?.messages ?? [];
+const summaryRow = afterMessages.find(
+  (message) => message.role === "system" && String(message.content?.[0]?.text ?? "").includes("truncated")
+);
+check(
+  "the summary node is on the active path and the transcript got shorter",
+  Boolean(summaryRow) && afterMessages.length < contextBeforeCount,
+  `${contextBeforeCount} -> ${afterMessages.length} messages`
+);
+check(
+  "replaced messages stay in the tree (nothing is deleted)",
+  (await jsonFetch(`/api/chats/${summarizeChatId}/export?format=json`)).status === 200
+);
+
+const presetsPut = await jsonFetch("/api/presets", {
+  method: "PUT",
+  body: JSON.stringify({
+    presets: [
+      { id: "smoke-preset", name: "Smoke", temperature: 0.3, topP: 0.9, maxTokens: 2048, thinkingBudget: 512 },
+    ],
+  }),
+});
+check(
+  "custom presets round-trip through the API",
+  presetsPut.status === 200 && (presetsPut.body?.presets ?? []).some((preset) => preset.id === "smoke-preset"),
+  `${(presetsPut.body?.presets ?? []).length} stored`
+);
+const presetsGet = await jsonFetch("/api/presets");
+check(
+  "saved presets come back on reload",
+  (presetsGet.body?.presets ?? []).some((preset) => preset.name === "Smoke")
+);
+const badPreset = await jsonFetch("/api/presets", {
+  method: "PUT",
+  body: JSON.stringify({ presets: [{ id: "bad", name: "Bad", temperature: 99, topP: 1, maxTokens: 10 }] }),
+});
+check("invalid presets are rejected", badPreset.status === 422 || badPreset.status === 400, `HTTP ${badPreset.status}`);
+
+
+// --- Fallback model: an unreachable primary hands off to the fallback ------
+
+const fallbackModelId =
+  (discovered.body?.models ?? []).find((model) => model.id !== modelId)?.id ?? modelId;
+
+const flakyServer = createServer((req, res) => {
+  if (req.method === "GET" && (req.url ?? "").endsWith("/models")) {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ object: "list", data: [{ id: "flaky-model", object: "model" }] }));
+    return;
+  }
+  res.writeHead(500, { "content-type": "application/json" });
+  res.end(JSON.stringify({ error: { message: "planned outage" } }));
+});
+await new Promise((resolve) => flakyServer.listen(0, "127.0.0.1", resolve));
+const flakyPort = flakyServer.address().port;
+
+const flakyProvider = await jsonFetch("/api/providers", {
+  method: "POST",
+  body: JSON.stringify({
+    name: "Flaky Provider",
+    baseUrl: `http://127.0.0.1:${flakyPort}/v1`,
+    apiFormat: "openai-completions",
+    apiKey: "flaky-key",
+  }),
+});
+const flakyProviderId = flakyProvider.body?.provider?.id;
+const flakyModels = await jsonFetch(`/api/providers/${flakyProviderId}/models`, {
+  method: "POST",
+  body: JSON.stringify({ discover: true }),
+});
+const flakyModelId = flakyModels.body?.models?.[0]?.id;
+
+await jsonFetch(`/api/models/${fallbackModelId}`, {
+  method: "PATCH",
+  body: JSON.stringify({ isFallback: true }),
+});
+
+const fallbackChat = await jsonFetch("/api/chats", {
+  method: "POST",
+  body: JSON.stringify({ title: "Fallback", modelId: flakyModelId, providerId: flakyProviderId }),
+});
+
+const fallbackResponse = await fetch(`${appUrl}/api/chat`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ chatId: fallbackChat.body?.chat?.id, message: "Hello from the fallback test" }),
+});
+const fallbackEvents = [];
+let fallbackText = "";
+if (fallbackResponse.ok && fallbackResponse.body) {
+  const reader = fallbackResponse.body.getReader();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let index = buf.indexOf("\n\n");
+    while (index !== -1) {
+      const chunk = buf.slice(0, index).trim();
+      buf = buf.slice(index + 2);
+      index = buf.indexOf("\n\n");
+      if (!chunk.startsWith("data:")) continue;
+      const event = JSON.parse(chunk.slice(5).trim());
+      fallbackEvents.push(event);
+      if (event.type === "text_delta") fallbackText += event.text;
+    }
+  }
+}
+
+const switchEvent = fallbackEvents.find((event) => event.type === "model_switch");
+check(
+  "an unreachable primary model falls back to the configured model",
+  Boolean(switchEvent) && fallbackText.length > 10 && !fallbackEvents.some((event) => event.type === "error"),
+  switchEvent ? `switched to ${switchEvent.modelLabel}` : "no model_switch event"
+);
+
+await jsonFetch(`/api/models/${fallbackModelId}`, {
+  method: "PATCH",
+  body: JSON.stringify({ isFallback: false }),
+});
+await jsonFetch(`/api/providers/${flakyProviderId}`, { method: "DELETE" });
+await new Promise((resolve) => flakyServer.close(resolve));
+
 
 const failed = results.filter((result) => !result.ok);
 console.log(`\n${results.length - failed.length}/${results.length} checks passed`);

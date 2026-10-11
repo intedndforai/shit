@@ -8,6 +8,7 @@ import { Composer } from "@/components/layout/composer";
 import { EmptyState } from "@/components/layout/empty-state";
 import { MessageList } from "@/components/chat/message-list";
 import { ArtifactPanel } from "@/components/artifacts/artifact-panel";
+import { ContextMeter } from "@/components/chat/context-meter";
 import { useChatStore } from "@/lib/store/chat-store";
 
 /** The conversation surface: empty state, transcript, composer, and errors. */
@@ -20,6 +21,7 @@ export function ChatView() {
   const stop = useChatStore((state) => state.stop);
   const regenerate = useChatStore((state) => state.regenerate);
   const loadChats = useChatStore((state) => state.loadChats);
+  const modelNote = useChatStore((state) => state.modelNote);
 
   React.useEffect(() => {
     void loadChats();
@@ -50,6 +52,15 @@ export function ChatView() {
         </div>
       ) : null}
 
+      {modelNote ? (
+        <div className="mx-auto mb-2 w-full max-w-3xl px-4">
+          <p className="rounded-xl border border-border bg-secondary/40 px-3 py-2 text-xs text-muted-foreground">
+            {modelNote}
+          </p>
+        </div>
+      ) : null}
+
+      <ContextMeter />
       <Composer onSend={send} onStop={stop} streaming={streaming} />
       </div>
       <ArtifactPanel />

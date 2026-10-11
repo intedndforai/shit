@@ -1,7 +1,7 @@
 import { jsonError, jsonOk, parseJson, errorResponse } from "@/lib/server/api";
 import { chatPatchSchema, deleteChat, getChat, updateChat } from "@/lib/server/chats";
 import { getActivePath } from "@/lib/server/branches";
-import { findModel, getProvider } from "@/lib/server/providers";
+import { findModel, fallbackModelFor, getProvider } from "@/lib/server/providers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,7 +36,17 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
         updatedAt: chat.updatedAt.getTime(),
       },
       model: model
-        ? { id: model.id, externalId: model.externalId, displayName: model.displayName }
+        ? {
+            id: model.id,
+            externalId: model.externalId,
+            displayName: model.displayName,
+            contextWindow: model.contextWindow,
+            maxOutputTokens: model.maxOutputTokens,
+            pricePerMillionInput: model.pricePerMillionInput,
+            pricePerMillionOutput: model.pricePerMillionOutput,
+            reasoningCapable: Boolean(model.capabilities?.reasoning),
+            fallbackId: fallbackModelFor(model)?.id ?? null,
+          }
         : null,
       provider: provider ? { id: provider.id, name: provider.name, apiFormat: provider.apiFormat } : null,
       messages: path.map((message) => ({

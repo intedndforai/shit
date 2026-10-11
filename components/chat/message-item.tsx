@@ -88,6 +88,17 @@ export function MessageItem({
   const artifacts = React.useMemo(() => parseArtifacts(rawText), [rawText]);
   const text = artifacts.length ? stripArtifacts(rawText) : rawText;
   const thinking = thinkingOf(message);
+  const thinkingPart = message.content.find((part) => part.kind === "thinking");
+  const thinkingMs = thinkingPart && thinkingPart.kind === "thinking" ? thinkingPart.durationMs : undefined;
+  const [elapsed, setElapsed] = React.useState(0);
+
+  // A live timer while the model is still thinking; the stored duration wins.
+  React.useEffect(() => {
+    if (!message.streaming || !thinking) return;
+    const startedAt = Date.now();
+    const timer = setInterval(() => setElapsed(Date.now() - startedAt), 500);
+    return () => clearInterval(timer);
+  }, [message.streaming, thinking]);
   const setArtifactsOpen = useUIStore((state) => state.setArtifactsOpen);
   const isUser = message.role === "user";
   const editing = editingId === message.id;
@@ -190,6 +201,11 @@ export function MessageItem({
           >
             <Brain className="size-3.5" />
             <span>{message.streaming && !text ? "Thinking..." : "Thought process"}</span>
+            {message.streaming && !text && !thinkingMs ? (
+              <span className="font-mono text-[11px]">{(elapsed / 1000).toFixed(1)}s</span>
+            ) : thinkingMs ? (
+              <span className="font-mono text-[11px]">{(thinkingMs / 1000).toFixed(1)}s</span>
+            ) : null}
             <span className="ml-auto">{showThinking ? "Hide" : "Show"}</span>
           </button>
           {showThinking ? (
