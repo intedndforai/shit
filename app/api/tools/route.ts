@@ -4,6 +4,7 @@ import { encryptText, maskSecret } from "@/lib/crypto";
 import { setSetting } from "@/lib/server/settings";
 import { availableToolNames, toolPayloads, type ToolPayload } from "@/lib/tools/registry";
 import { SEARCH_PROVIDERS, readSearchApiKey, readToolsConfig } from "@/lib/tools/web-search";
+import { workspaceStatus } from "@/lib/tools/workspace";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,6 +21,15 @@ const configSchema = z.object({
     .optional(),
   fetch: z.object({ enabled: z.boolean().optional() }).optional(),
   code: z.object({ autoApprove: z.boolean().optional() }).optional(),
+  coding: z
+    .object({
+      enabled: z.boolean().optional(),
+      root: z.string().trim().max(500).optional(),
+      allowCommands: z.boolean().optional(),
+      autoApproveWrites: z.boolean().optional(),
+      maxReadBytes: z.number().int().min(4_000).max(1_000_000).optional(),
+    })
+    .optional(),
   /** Write-only: never echoed back. `null` clears the stored secret. */
   searchApiKey: z.string().trim().max(400).nullable().optional(),
 });
@@ -30,6 +40,8 @@ interface ToolsPayload {
   maskedSearchApiKey: string;
   available: string[];
   specs: ToolPayload[];
+  /** Where the coding tools would read and write, plus whether they are on. */
+  workspace: ReturnType<typeof workspaceStatus>;
 }
 
 function payload(): ToolsPayload {
@@ -42,6 +54,7 @@ function payload(): ToolsPayload {
     maskedSearchApiKey: maskSecret(apiKey),
     available: availableToolNames(),
     specs: toolPayloads(),
+    workspace: workspaceStatus(),
   };
 }
 
@@ -68,6 +81,7 @@ export async function PATCH(request: Request) {
       webSearch: { ...current.webSearch, ...(parsed.data.webSearch ?? {}) },
       fetch: { ...current.fetch, ...(parsed.data.fetch ?? {}) },
       code: { ...current.code, ...(parsed.data.code ?? {}) },
+      coding: { ...current.coding, ...(parsed.data.coding ?? {}) },
     });
 
     if (parsed.data.searchApiKey !== undefined) {

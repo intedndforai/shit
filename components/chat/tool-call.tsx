@@ -17,6 +17,20 @@ function humanise(name: string): string {
   return name.replace(/_/g, " ").replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
+/** A one-line summary of a workspace tool call for the collapsed card. */
+function codingSummary(name: string, input: unknown): string | null {
+  const record = (input ?? {}) as Record<string, unknown>;
+  const text = (key: string) => (typeof record[key] === "string" ? (record[key] as string) : "");
+  if (name === "write_file") {
+    const content = text("content");
+    return `${text("path")} · ${content.split("\n").length} lines`;
+  }
+  if (name === "edit_file") return `${text("path")} · ${text("find").slice(0, 60)}`;
+  if (name === "run_command") return text("command");
+  if (name === "read_file" || name === "list_files") return text("path") || ".";
+  if (name === "search_files") return text("query");
+  return null;
+}
 function summariseInput(input: unknown): string {
   if (!input || typeof input !== "object") return "";
   const entries = Object.entries(input as Record<string, unknown>);
@@ -303,7 +317,9 @@ export function ToolCallList({ content }: { content: ContentPart[] }) {
               )}
               <Wrench className="size-3.5 shrink-0 text-muted-foreground" />
               <span className="font-medium">{humanise(call.name)}</span>
-              <span className="min-w-0 flex-1 truncate text-muted-foreground">{summariseInput(call.input)}</span>
+              <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                {codingSummary(call.name, call.input) ?? summariseInput(call.input)}
+              </span>
             </summary>
 
             <div className="mt-2 flex flex-col gap-1.5 border-t border-border pt-2">

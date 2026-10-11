@@ -7,6 +7,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { AttachmentChips } from "@/components/chat/attachments/attachment-chips";
 import { ChatControls } from "@/components/chat/chat-controls";
 import { ToolsMenu } from "@/components/chat/tools-menu";
+import { ModelSelector } from "@/components/chat/model-selector";
 import { PrivacyBadge } from "@/components/privacy/privacy-badge";
 import { SendInspector } from "@/components/privacy/send-inspector";
 import { PrivacyBlockDialog } from "@/components/privacy/privacy-block-dialog";
@@ -465,6 +466,8 @@ export function Composer({
             </TooltipTrigger>
             <TooltipContent>Attach text, PDF, DOCX, XLSX, images, or a ZIP archive</TooltipContent>
           </Tooltip>
+
+          <ModelSelector />
 
           <ToolsMenu />
 

@@ -30,6 +30,8 @@ format. Requests go through your own server, so keys never reach the browser.
 | M10 | Voice, accessibility, PWA, shortcuts, mobile polish | ⏳ Planned |
 | M11 | Multi-user auth, sharing, usage dashboard, Docker, tests | ⏳ Partial (Docker, single-user mode) |
 | **Privacy** | Privacy modes, reversible redaction, provider policy gate, metadata-only egress log, send inspector, one-click delete | ✅ Shipped |
+| **Coding** | Agentic coding in a local workspace (list, read, search, write, edit, run) with approval on every change | ✅ Shipped |
+| **Models** | In-chat model selector next to the tools menu; `@` switches one turn | ✅ Shipped |
 
 What works today:
 
@@ -58,6 +60,12 @@ What works today:
   **CSV / table analysis**. Runs Python and JavaScript too, in your browser with your approval.
   Tool calls stream into the transcript as collapsible cards with their output and any sources,
   and the model keeps working until it has an answer.
+- Turn on the **coding workspace** in Settings → Tools and point it at a folder. The model can then
+  list, read and search files, write and edit them, and — if you allow it — run shell commands there.
+  Every write, edit and command arrives as an approval card first, with a diff or the exact command
+  line. Reads are classified as local egress, so Strict Local mode keeps working.
+- Choose the **model inside the chat**: the composer has a model menu beside the tools menu, and typing
+  `@` switches the model for a single turn.
 - Extended thinking shows up as a collapsible panel with a live timer and the final duration, and
   a per-chat thinking-budget slider where the model supports it.
 - A context meter above the composer estimates how much of the model's window the conversation
@@ -136,6 +144,10 @@ docker compose up --build
 The compose file stores SQLite data in the `conduit-data` volume mounted at `/data`
 (set `SQLITE_PATH=/data/conduit.db`, which the compose file already does).
 
+For Cloudflare, read [docs/deploy-cloudflare.md](docs/deploy-cloudflare.md). Pages cannot run this
+app, a bare Workers upload needs an async D1 rewrite, a Tunnel needs no code changes, and Containers
+can run the image above as it is.
+
 ## Connecting a provider
 
 Everything is configured in **Settings → Providers**. Pick the API format that matches the endpoint:
@@ -179,6 +191,7 @@ Add a provider pointing at `http://127.0.0.1:4123/v1` (any key) to chat with the
 | --- | --- | --- |
 | `ENCRYPTION_KEY` | ✅ for saving keys | Derives the AES-256-GCM key that encrypts provider API keys at rest. Any long random string. |
 | `SQLITE_PATH` | — | SQLite file location. Defaults to `./data/conduit.db`. |
+| `WORKSPACE_ROOT` | — | Folder the coding tools may touch. Overrides the folder saved in Settings → Tools. |
 | `APP_PASSWORD` | — | Optional single-user password gate (planned, M11). |
 | `NEXT_PUBLIC_APP_URL` | — | Public URL used for share links (M11). |
 
@@ -250,6 +263,7 @@ docs/                Architecture notes and screenshots
 | `npm run files:check` | Verify upload/extraction handling. |
 | `npm run artifacts:check` | Verify artifact capture, versioning and image routing (needs dev + mock provider). |
 | `npm run privacy:check` | Verify privacy modes, reversible redaction, the policy gate and the egress log (needs dev + mock provider). |
+| `npm run coding:check` | Verify the coding workspace tools, their guard rails and the in-chat model selector (needs dev + mock provider). |
 | `npm run redact:check` | Unit-check the reversible redaction engine. |
 
 ## Privacy
@@ -307,6 +321,7 @@ Issues and pull requests are welcome. Before opening a PR:
 npm run typecheck && npm run lint && npm run smoke
 npm run files:check    # with dev + mock provider running
 npm run privacy:check  # with dev + mock provider running (resets the dev DB)
+npm run coding:check   # with dev + mock provider running
 ```
 
 Keep adapters vendor-neutral: new formats belong in `lib/providers/` behind the existing

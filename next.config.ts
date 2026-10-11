@@ -48,6 +48,33 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   // Produces .next/standalone for the Docker image.
   output: "standalone",
+
+  // Keep runtime data out of the deploy artifact. File tracing follows
+  // path.resolve(process.cwd(), ...) in lib/db/index.ts and the upload
+  // helpers, so on its own it copies the whole project, including ./data with
+  // the SQLite database and every uploaded attachment, into .next/standalone.
+  // (.env is copied by the Next build itself; the Dockerfile deletes it.)
+  outputFileTracingExcludes: {
+    "*": [
+      "./data/**",
+      "./.env*",
+      "./.git/**",
+      "./.tmp/**",
+      "./docs/**",
+      "./scripts/**",
+      "./*.md",
+      "./tsconfig*.json",
+      "./eslint.config.mjs",
+      "./drizzle.config.ts",
+      // Build-time config only. Do not exclude a bare `./lib/**` or
+      // `./app/**` here: the glob also matches every package's own `lib`
+      // folder (better-sqlite3, mammoth, sharp) and guts the runtime.
+      "./next.config.ts",
+      "./postcss.config.mjs",
+      "./package-lock.json",
+      "./tsconfig.tsbuildinfo",
+    ],
+  },
   async headers() {
     return [
       { source: "/(.*)", headers: SECURITY_HEADERS },

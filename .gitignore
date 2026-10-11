@@ -52,4 +52,6 @@ yarn-error.log*
 # local scratch files
 .tmp-*
 /.tmp/
+/.tools/
+/workspace/
 

@@ -7,6 +7,7 @@ services:
     environment:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-change-me-generate-a-real-key}
       - SQLITE_PATH=/data/conduit.db
+      - UPLOADS_DIR=/data/uploads
       - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
     volumes:
       - conduit-data:/data

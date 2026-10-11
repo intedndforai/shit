@@ -10,6 +10,18 @@ import { decryptText } from "@/lib/crypto";
 export const SEARCH_PROVIDERS = ["tavily", "brave", "serper", "searxng", "custom"] as const;
 export type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
 
+/** The coding agent works inside a single folder on this machine. */
+export interface CodingConfig {
+  enabled: boolean;
+  /** Folder the coding tools may touch, relative to the server's working directory. */
+  root: string;
+  /** Let the agent run shell commands, still approval-gated. */
+  allowCommands: boolean;
+  /** Skip the approval prompt for write_file and edit_file. */
+  autoApproveWrites: boolean;
+  /** Largest file read_file will load into a tool result. */
+  maxReadBytes: number;
+}
 export interface ToolsConfig {
   webSearch: {
     enabled: boolean;
@@ -23,6 +35,8 @@ export interface ToolsConfig {
   fetch: { enabled: boolean };
   /** Browser-side code runners (Python/JavaScript) ask before running by default. */
   code: { autoApprove: boolean };
+  /** Agentic coding: file and shell tools that act on one folder. */
+  coding: CodingConfig;
 }
 
 export interface ToolsSecrets {
@@ -33,6 +47,13 @@ export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
   webSearch: { enabled: false, provider: "tavily", maxResults: 5 },
   fetch: { enabled: true },
   code: { autoApprove: false },
+  coding: {
+    enabled: false,
+    root: "workspace",
+    allowCommands: false,
+    autoApproveWrites: false,
+    maxReadBytes: 200_000,
+  },
 };
 
 export function readToolsConfig(): ToolsConfig {
@@ -41,6 +62,7 @@ export function readToolsConfig(): ToolsConfig {
     webSearch: { ...DEFAULT_TOOLS_CONFIG.webSearch, ...(stored?.webSearch ?? {}) },
     fetch: { ...DEFAULT_TOOLS_CONFIG.fetch, ...(stored?.fetch ?? {}) },
     code: { ...DEFAULT_TOOLS_CONFIG.code, ...(stored?.code ?? {}) },
+    coding: { ...DEFAULT_TOOLS_CONFIG.coding, ...(stored?.coding ?? {}) },
   };
 }
 

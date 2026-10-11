@@ -21,6 +21,7 @@
     "files:check": "node scripts/files-check.mjs",
     "artifacts:check": "node scripts/artifacts-check.mjs",
     "privacy:check": "node scripts/privacy-check.mjs",
+    "coding:check": "node scripts/coding-check.mjs",
     "redact:check": "tsx scripts/redact-check.ts"
   },
   "dependencies": {

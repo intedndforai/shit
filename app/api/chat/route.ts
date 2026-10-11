@@ -49,6 +49,7 @@ import {
   type ToolCitation,
 } from "@/lib/tools/registry";
 import { readToolsConfig, searchDestination } from "@/lib/tools/web-search";
+import { workspaceRoot } from "@/lib/tools/workspace";
 import { waitForClientTool } from "@/lib/server/pending-tools";
 import { styleInstructions } from "@/lib/server/styles";
 import { getProject, retrieveProjectContext, type RetrievedPassage } from "@/lib/server/projects";
@@ -72,7 +73,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /** How many assistant→tool→assistant rounds one answer may take. */
-const MAX_TOOL_ROUNDS = 6;
+const MAX_TOOL_ROUNDS = 12;
 
 const contentPartSchema = z.object({
   kind: z.enum(["text", "image", "document"]),
@@ -420,6 +421,22 @@ export async function POST(request: Request) {
   if (profile) contextBlocks.push(profile);
   const style = styleInstructions(chat.styleId);
   if (style) contextBlocks.push(`Response style: ${style}`);
+  // Agentic coding: with the workspace on, spell out the folder and the
+  // working rules so the model reaches for the file tools deliberately.
+  const coding = readToolsConfig().coding;
+  if (coding.enabled) {
+    contextBlocks.push(
+      [
+        `Coding workspace: ${workspaceRoot()}`,
+        "You can inspect and change files in that folder with list_files, read_file, search_files, write_file and edit_file.",
+        "Read a file before you change it, prefer edit_file for small changes, and leave unrelated code alone.",
+        coding.allowCommands
+          ? "run_command runs a shell command in that folder once the user approves it; use it to install, build, or test your work."
+          : "Shell commands are switched off, so work with the file tools alone.",
+        "Every write, edit and command is approved by the user first, so say what you are about to do before you do it.",
+      ].join(" ")
+    );
+  }
 
   // Built-in artifact instruction (M5): a self-contained deliverable can be
   // published as a versioned artifact the user previews beside the chat.

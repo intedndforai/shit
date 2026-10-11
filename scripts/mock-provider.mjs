@@ -185,6 +185,39 @@ function buildFrames(body) {
     }
   }
 
+  // Agentic coding: drive the workspace file tools from the wording of the turn.
+  const codingCall = (id, name, args) => ({
+    frames: [{ tool_calls: [{ index: 0, id, function: { name, arguments: JSON.stringify(args) } }] }],
+    text: "",
+    finishReason: "tool_calls",
+  });
+
+  if (hasTools && /write a file/i.test(question) && toolNames.includes("write_file")) {
+    return codingCall("call_mock_write", "write_file", {
+      path: "notes/hello.txt",
+      content: "hello from the mock provider\n",
+    });
+  }
+
+  if (hasTools && /read the file/i.test(question) && toolNames.includes("read_file")) {
+    return codingCall("call_mock_read", "read_file", { path: "notes/hello.txt" });
+  }
+
+  if (hasTools && /list the workspace/i.test(question) && toolNames.includes("list_files")) {
+    return codingCall("call_mock_list", "list_files", { path: ".", depth: 2 });
+  }
+
+  if (hasTools && /escape the workspace/i.test(question) && toolNames.includes("write_file")) {
+    return codingCall("call_mock_escape", "write_file", { path: "../escaped.txt", content: "never\n" });
+  }
+
+  if (hasTools && /read the env file/i.test(question) && toolNames.includes("read_file")) {
+    return codingCall("call_mock_env", "read_file", { path: ".env" });
+  }
+
+  if (hasTools && /run a command/i.test(question) && toolNames.includes("run_command")) {
+    return codingCall("call_mock_command", "run_command", { command: "echo codex-mock-ok" });
+  }
   if (hasTools && /custom-tool-call/i.test(question)) {
     const target = toolNames.find((name) => name.startsWith("custom__"));
     if (target) {

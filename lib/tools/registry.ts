@@ -7,6 +7,16 @@ import { SearchNotConfiguredError, readToolsConfig, searchDestination, webSearch
 import { UnitError, convertUnits } from "./units";
 import { callMcpTool, enabledMcpTools, findToolByExposedName } from "@/lib/mcp/client";
 import { customToolsForModel, findCustomToolByExposed, runCustomTool } from "./custom";
+import {
+  WorkspaceError,
+  editFile,
+  isCodingTool,
+  listFiles,
+  readFile,
+  runCommand,
+  searchFiles,
+  writeFile,
+} from "./workspace";
 
 /**
  * Built-in tool registry.
@@ -176,6 +186,109 @@ export const TOOL_SPECS: ToolSpec[] = [
     requiresApproval: true,
     dataEgress: { kind: "local", note: "Runs in a sandboxed Web Worker in your browser. No network access." },
   },
+  {
+    name: "list_files",
+    label: "List workspace files",
+    description:
+      "List the files and folders of the coding workspace. Use it first to orient yourself; every path is relative to the workspace root.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Folder relative to the workspace root. Defaults to the root." },
+        depth: { type: "number", description: "How many levels deep to walk. Defaults to 2, maximum 6." },
+      },
+    },
+    defaultEnabled: true,
+    dataEgress: { kind: "local", note: "Reads the workspace folder on this machine." },
+  },
+  {
+    name: "read_file",
+    label: "Read a workspace file",
+    description:
+      "Read a text file from the coding workspace with line numbers. Use startLine and endLine for a slice of a long file.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File relative to the workspace root." },
+        startLine: { type: "number", description: "First line to return, 1-based." },
+        endLine: { type: "number", description: "Last line to return, 1-based and inclusive." },
+      },
+      required: ["path"],
+    },
+    defaultEnabled: true,
+    dataEgress: { kind: "local", note: "Reads a file on this machine." },
+  },
+  {
+    name: "search_files",
+    label: "Search workspace files",
+    description:
+      "Search the coding workspace for a string or regular expression and get file:line matches. node_modules and build output are skipped.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Text or regular expression to look for." },
+        path: { type: "string", description: "Folder to search. Defaults to the workspace root." },
+        maxResults: { type: "number", description: "Stop after this many matches. Defaults to 30." },
+      },
+      required: ["query"],
+    },
+    defaultEnabled: true,
+    dataEgress: { kind: "local", note: "Reads workspace files on this machine." },
+  },
+  {
+    name: "write_file",
+    label: "Write a workspace file",
+    description:
+      "Create or replace a file in the coding workspace. The user sees the path and a diff before it is written, so explain the change in your reply.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File relative to the workspace root." },
+        content: { type: "string", description: "The complete new contents of the file." },
+      },
+      required: ["path", "content"],
+    },
+    defaultEnabled: true,
+    requiresApproval: true,
+    dataEgress: { kind: "local", note: "Writes a file on this machine after you approve it." },
+  },
+  {
+    name: "edit_file",
+    label: "Edit a workspace file",
+    description:
+      "Replace an exact snippet inside a workspace file. Prefer this over write_file for small changes. Pass replaceAll to change every occurrence.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File relative to the workspace root." },
+        find: { type: "string", description: "The exact text to replace, copied from the file." },
+        replace: { type: "string", description: "The text to put in its place." },
+        replaceAll: { type: "boolean", description: "Replace every occurrence instead of requiring a unique match." },
+      },
+      required: ["path", "find", "replace"],
+    },
+    defaultEnabled: true,
+    requiresApproval: true,
+    dataEgress: { kind: "local", note: "Edits a file on this machine after you approve it." },
+  },
+  {
+    name: "run_command",
+    label: "Run a shell command",
+    description:
+      "Run a shell command inside the coding workspace and return its exit code, stdout and stderr. Needs the user\u2019s approval, and Settings must allow commands.",
+    parameters: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "The command line to run." },
+        cwd: { type: "string", description: "Folder to run it in, relative to the workspace root." },
+        timeoutMs: { type: "number", description: "Timeout in milliseconds. Defaults to 60000, maximum 120000." },
+      },
+      required: ["command"],
+    },
+    defaultEnabled: false,
+    requiresApproval: true,
+    dataEgress: { kind: "local", note: "Runs a command on this machine after you approve it." },
+  },
 ];
 
 export const DEFAULT_TOOL_NAMES = TOOL_SPECS.filter((tool) => tool.defaultEnabled).map((tool) => tool.name);
@@ -190,6 +303,8 @@ export function availableToolNames(): string[] {
   const builtins = TOOL_SPECS.filter((tool) => {
     if (tool.name === "web_search") return config.webSearch.enabled;
     if (tool.name === "fetch_url") return config.fetch.enabled;
+    if (tool.name === "run_command") return config.coding.enabled && config.coding.allowCommands;
+    if (isCodingTool(tool.name)) return config.coding.enabled;
     return true;
   }).map((tool) => tool.name);
 
@@ -200,10 +315,20 @@ export function availableToolNames(): string[] {
   ];
 }
 
+/**
+ * Coding tools read their approval rule from Settings, so the spec is rebuilt
+ * per call instead of being frozen in TOOL_SPECS.
+ */
+function codingApproval(spec: ToolSpec): ToolSpec {
+  // Only the mutating tools are approval-gated; reads stay frictionless.
+  if (!isCodingTool(spec.name) || !spec.requiresApproval) return spec;
+  const coding = readToolsConfig().coding;
+  return { ...spec, requiresApproval: !coding.autoApproveWrites };
+}
 /** Spec for a built-in tool, or a synthetic one for an MCP/custom tool. */
 export function toolSpec(name: string): ToolSpec | undefined {
   const builtin = TOOL_SPECS.find((spec) => spec.name === name);
-  if (builtin) return builtin;
+  if (builtin) return codingApproval(builtin);
 
   const mcp = enabledMcpTools().find((entry) => entry.tool.exposed === name);
   if (mcp) {
@@ -340,7 +465,7 @@ export interface ToolPayload {
 
 export function toolPayloads(): ToolPayload[] {
   const available = new Set(availableToolNames());
-  const payloads: ToolPayload[] = TOOL_SPECS.map((tool) => ({
+  const payloads: ToolPayload[] = TOOL_SPECS.map((spec) => codingApproval(spec)).map((tool) => ({
     name: tool.name,
     label: tool.label,
     description: tool.description ?? "",
@@ -484,6 +609,51 @@ export async function runTool(name: string, input: unknown): Promise<ToolRunResu
       return { output: clampOutput(JSON.stringify(stats, null, 2)), isError: false };
     }
 
+    if (isCodingTool(name)) {
+      const record = (input ?? {}) as Record<string, unknown>;
+      const text = (key: string) => (typeof record[key] === "string" ? (record[key] as string) : "");
+      const count = (key: string) => (typeof record[key] === "number" ? (record[key] as number) : undefined);
+      const flag = (key: string) => record[key] === true;
+
+      if (name === "list_files") {
+        return { output: listFiles({ path: text("path"), depth: count("depth") }), isError: false };
+      }
+      if (name === "read_file") {
+        if (!text("path")) return { output: "read_file needs a `path`.", isError: true };
+        return {
+          output: readFile({ path: text("path"), startLine: count("startLine"), endLine: count("endLine") }),
+          isError: false,
+        };
+      }
+      if (name === "search_files") {
+        return {
+          output: searchFiles({ query: text("query"), path: text("path"), maxResults: count("maxResults") }),
+          isError: false,
+        };
+      }
+      if (name === "write_file") {
+        if (!text("path")) return { output: "write_file needs a `path`.", isError: true };
+        return { output: writeFile({ path: text("path"), content: text("content") }), isError: false };
+      }
+      if (name === "edit_file") {
+        if (!text("path")) return { output: "edit_file needs a `path`.", isError: true };
+        return {
+          output: editFile({
+            path: text("path"),
+            find: text("find"),
+            replace: text("replace"),
+            replaceAll: flag("replaceAll"),
+          }),
+          isError: false,
+        };
+      }
+      if (name === "run_command") {
+        return {
+          output: runCommand({ command: text("command"), cwd: text("cwd"), timeoutMs: count("timeoutMs") }),
+          isError: false,
+        };
+      }
+    }
     const mcp = findToolByExposedName(name);
     if (mcp) {
       try {
@@ -508,7 +678,8 @@ export async function runTool(name: string, input: unknown): Promise<ToolRunResu
       error instanceof ExpressionError ||
       error instanceof UnitError ||
       error instanceof FetchError ||
-      error instanceof SearchNotConfiguredError
+      error instanceof SearchNotConfiguredError ||
+      error instanceof WorkspaceError
     ) {
       return { output: error.message, isError: true };
     }

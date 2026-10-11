@@ -253,6 +253,25 @@ Progress streams as `research_step` events (rendered as a timeline) and the sour
 citations. Every network call takes the request's abort signal, which is what makes the Stop button
 cancel the whole run; the client also carries the steps and sources onto the reconciled answer the
 same way it carries project excerpts.
+## Agentic coding (workspace tools)
+
+The coding agent is a set of server-executed tools rather than a second pipeline, so it reuses the
+existing approval UI, egress accounting and privacy gate.
+
+- `lib/tools/workspace.ts` owns the filesystem. Paths are normalised against the configured root,
+  and `..`, absolute paths and symlink escapes are refused. `.git`, `.ssh`, `.env*`, key and
+  database files are off limits for reads and writes alike.
+- Six tools live in `lib/tools/registry.ts`: `list_files`, `read_file`, `search_files`,
+  `write_file`, `edit_file` and `run_command`. Reads are `local` egress; writes and commands set
+  `requiresApproval`, so the chat route parks the call and waits for the user just like an MCP tool.
+- Settings → Tools keeps the folder plus "allow commands" and "auto-approve writes" in
+  `tools.config.coding`; `WORKSPACE_ROOT` overrides the folder for container deployments.
+- While the feature is on, the chat route lifts `MAX_TOOL_ROUNDS` to 12 and adds a workspace
+  paragraph to the system prompt, and `scripts/coding-check.mjs` drives the whole loop against the
+  mock provider.
+- The in-chat model selector (`components/chat/model-selector.tsx`) pins a model to the conversation
+  through `PATCH /api/chats/:id`, while the composer's `@` picker still switches a single turn
+  through the UI store's `pendingModelId`.
 ## Provider contract
 
 ```ts

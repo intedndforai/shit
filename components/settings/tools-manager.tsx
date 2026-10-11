@@ -66,7 +66,7 @@ export function ToolsManager() {
     );
   }
 
-  const { webSearch } = state.config;
+  const { webSearch, coding } = state.config;
 
   return (
     <Card>
@@ -77,8 +77,8 @@ export function ToolsManager() {
         </CardTitle>
         <CardDescription>
           Models can search the web, read a URL, calculate, convert units, tell the time, analyse CSV data,
-          and run Python or JavaScript. Server-side tools need an API key here; code always runs in your
-          browser, and nothing is called until a model asks for it.
+          run Python or JavaScript, and work on code in a folder on this machine. Server-side tools need an
+          API key here; code always runs in your browser, and nothing is called until a model asks for it.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
@@ -210,6 +210,73 @@ export function ToolsManager() {
           />
         </div>
 
+        <div className="flex flex-col gap-3 border-t border-border pt-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <Label htmlFor="coding-toggle">Coding workspace</Label>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Let the model read, search and change files in one folder on this machine, and run commands
+                there when you approve them. Files never leave your disk, and every write is shown to you
+                before it lands.
+              </p>
+            </div>
+            <Switch
+              id="coding-toggle"
+              checked={coding.enabled}
+              onCheckedChange={(checked) =>
+                void save(
+                  { coding: { enabled: checked } },
+                  checked ? "Coding workspace enabled." : "Coding workspace disabled."
+                )
+              }
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="coding-root">Workspace folder</Label>
+            <Input
+              id="coding-root"
+              defaultValue={coding.root}
+              placeholder="workspace"
+              onBlur={(event) => void save({ coding: { root: event.target.value.trim() || "workspace" } })}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Relative to the server folder, or an absolute path. Resolved today:
+              <span className="ml-1 font-mono">{state.workspace?.root ?? "…"}</span>
+              {state.workspace && !state.workspace.exists ? " (created on the first write)" : null}
+            </p>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <Label htmlFor="coding-commands">Let the agent run commands</Label>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Adds run_command. Every call still needs your approval, and it runs inside the workspace
+                folder.
+              </p>
+            </div>
+            <Switch
+              id="coding-commands"
+              checked={coding.allowCommands}
+              onCheckedChange={(checked) => void save({ coding: { allowCommands: checked } })}
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <Label htmlFor="coding-auto-approve">Write files without asking</Label>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Skips the approval prompt for write_file and edit_file. Leave it off to review every change
+                before it is saved.
+              </p>
+            </div>
+            <Switch
+              id="coding-auto-approve"
+              checked={coding.autoApproveWrites}
+              onCheckedChange={(checked) => void save({ coding: { autoApproveWrites: checked } })}
+            />
+          </div>
+        </div>
         <div className="flex flex-col gap-2 border-t border-border pt-4">
           <p className="text-xs font-medium text-muted-foreground">Built-in tools</p>
           <ul className="flex flex-col gap-1.5">

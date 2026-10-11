@@ -241,6 +241,21 @@ export interface ToolsState {
     };
     fetch: { enabled: boolean };
     code: { autoApprove: boolean };
+    coding: {
+      enabled: boolean;
+      root: string;
+      allowCommands: boolean;
+      autoApproveWrites: boolean;
+      maxReadBytes: number;
+    };
+  };
+  /** Resolved coding workspace, so Settings can show the real folder. */
+  workspace?: {
+    enabled: boolean;
+    root: string;
+    exists: boolean;
+    allowCommands: boolean;
+    autoApproveWrites: boolean;
   };
   hasSearchApiKey: boolean;
   maskedSearchApiKey: string;

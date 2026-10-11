@@ -29,5 +29,8 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 USER nextjs
+# User data and secrets are created at runtime, never baked into the image.
+RUN rm -rf ./data ./.env ./.next/cache
+
 EXPOSE 3000
 CMD ["node", "server.js"]

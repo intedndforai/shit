@@ -11,6 +11,11 @@ export const MAX_ZIP_ENTRY_BYTES = 12 * 1024 * 1024;
 export const MAX_ZIP_TOTAL_BYTES = 60 * 1024 * 1024;
 
 export function uploadsDir(): string {
+  // Container images point UPLOADS_DIR at the same volume as SQLITE_PATH so
+  // attachment bytes and their metadata survive a restart. Local runs keep
+  // using ./data/uploads.
+  const configured = process.env.UPLOADS_DIR?.trim();
+  if (configured) return path.resolve(process.cwd(), configured);
   return path.join(process.cwd(), "data", "uploads");
 }
 
