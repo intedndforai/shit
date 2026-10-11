@@ -1,0 +1,16 @@
+services:
+  conduit:
+    build: .
+    container_name: conduit
+    ports:
+      - "3000:3000"
+    environment:
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-change-me-generate-a-real-key}
+      - SQLITE_PATH=/data/conduit.db
+      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+    volumes:
+      - conduit-data:/data
+    restart: unless-stopped
+
+volumes:
+  conduit-data:
