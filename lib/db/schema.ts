@@ -176,7 +176,7 @@ export type ContentPart =
       id: string;
       name: string;
       input: unknown;
-      status?: "pending" | "running" | "success" | "error";
+      status?: "pending" | "running" | "awaiting_approval" | "denied" | "success" | "error";
       error?: string;
     }
   | { kind: "tool_result"; id: string; output: string; isError?: boolean }

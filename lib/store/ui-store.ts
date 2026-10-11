@@ -21,6 +21,32 @@ export interface DraftAttachment {
   error?: string;
 }
 
+/** A file a code run produced, handed to the browser as a data URL. */
+export interface ToolRunFile {
+  name: string;
+  size: number;
+  mime: string;
+  dataUrl: string;
+}
+
+/** Live state for a tool the browser is executing (see lib/client/code-tools.ts). */
+export interface ToolRunState {
+  id: string;
+  name: string;
+  label: string;
+  input: unknown;
+  requiresApproval: boolean;
+  status: "approval" | "running" | "done" | "error" | "denied";
+  stdout: string;
+  stderr: string;
+  note?: string;
+  result?: string;
+  figures: string[];
+  files: ToolRunFile[];
+  error?: string;
+  durationMs?: number;
+}
+
 interface UIState {
   /* Layout */
   sidebarCollapsed: boolean;
@@ -35,6 +61,8 @@ interface UIState {
   attachments: DraftAttachment[];
   /** Tool names selected for the next message (null = registry defaults). */
   pendingTools: string[] | null;
+  /** Ephemeral state for browser-executed tool calls, keyed by tool call id. */
+  toolRuns: Record<string, ToolRunState>;
   /* Actions */
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
@@ -49,6 +77,10 @@ interface UIState {
   removeAttachment: (id: string) => void;
   clearAttachments: () => void;
   setPendingTools: (tools: string[] | null) => void;
+  startToolRun: (run: ToolRunState) => void;
+  patchToolRun: (id: string, patch: Partial<ToolRunState>) => void;
+  removeToolRun: (id: string) => void;
+  clearToolRuns: () => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -62,6 +94,7 @@ export const useUIStore = create<UIState>()(
       composerDraft: "",
       attachments: [],
       pendingTools: null,
+      toolRuns: {},
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       setMobileNavOpen: (mobileNavOpen) => set({ mobileNavOpen }),
@@ -81,6 +114,20 @@ export const useUIStore = create<UIState>()(
         set((state) => ({ attachments: state.attachments.filter((attachment) => attachment.id !== id) })),
       clearAttachments: () => set({ attachments: [] }),
       setPendingTools: (pendingTools) => set({ pendingTools }),
+      startToolRun: (run) => set((state) => ({ toolRuns: { ...state.toolRuns, [run.id]: run } })),
+      patchToolRun: (id, patch) =>
+        set((state) => {
+          const current = state.toolRuns[id];
+          if (!current) return state;
+          return { toolRuns: { ...state.toolRuns, [id]: { ...current, ...patch } } };
+        }),
+      removeToolRun: (id) =>
+        set((state) => {
+          const next = { ...state.toolRuns };
+          delete next[id];
+          return { toolRuns: next };
+        }),
+      clearToolRuns: () => set({ toolRuns: {} }),
     }),
     {
       name: "conduit-ui",

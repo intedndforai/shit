@@ -4,6 +4,7 @@ import { analyseCsv } from "./csv-stats";
 import { FetchError, fetchUrl } from "./fetch-url";
 import { evaluateExpression, ExpressionError } from "./math";
 import { SearchNotConfiguredError, readToolsConfig, webSearch } from "./web-search";
+import { UnitError, convertUnits } from "./units";
 
 /**
  * Built-in tool registry.
@@ -19,6 +20,14 @@ export interface ToolSpec extends ToolDefinition {
   defaultEnabled: boolean;
   /** Only offered when the user has configured the backing service. */
   requiresConfig?: boolean;
+  /**
+   * Where the tool runs. "server" tools are executed inside the route handler;
+   * "client" tools are handed to the browser (code runners), which posts the
+   * result back and keeps the user's code on their own machine.
+   */
+  execution?: "server" | "client";
+  /** Ask the user before running, then show the output inline. */
+  requiresApproval?: boolean;
 }
 
 export const TOOL_SPECS: ToolSpec[] = [
@@ -80,6 +89,53 @@ export const TOOL_SPECS: ToolSpec[] = [
     },
     defaultEnabled: true,
   },
+  {
+    name: "convert_units",
+    label: "Convert units",
+    description:
+      "Convert a value between units of length, mass, volume, time, area, speed, data, energy, or temperature.",
+    parameters: {
+      type: "object",
+      properties: {
+        value: { type: "number", description: "The numeric value to convert." },
+        from: { type: "string", description: "Source unit, e.g. km, lb, c, GiB." },
+        to: { type: "string", description: "Target unit, e.g. mi, kg, f, MB." },
+      },
+      required: ["value", "from", "to"],
+    },
+    defaultEnabled: true,
+  },
+  {
+    name: "run_python",
+    label: "Run Python",
+    description:
+      "Run Python in the user's browser (Pyodide/WebAssembly) and return stdout. numpy, pandas and " +
+      "matplotlib are downloaded on demand; figures come back as images. Use conduit_save(name, data) " +
+      "to hand the user a file. The user approves each run first, so keep the code focused.",
+    parameters: {
+      type: "object",
+      properties: { code: { type: "string", description: "The Python source to execute." } },
+      required: ["code"],
+    },
+    defaultEnabled: true,
+    execution: "client",
+    requiresApproval: true,
+  },
+  {
+    name: "run_javascript",
+    label: "Run JavaScript",
+    description:
+      "Run JavaScript in a sandboxed Web Worker in the user's browser. console.log output is captured " +
+      "and a top-level return value is shown. No DOM and no network access.",
+    parameters: {
+      type: "object",
+      properties: { code: { type: "string", description: "The JavaScript source to execute." } },
+      required: ["code"],
+    },
+    defaultEnabled: true,
+    execution: "client",
+    requiresApproval: true,
+  },
 ];
 
 export const DEFAULT_TOOL_NAMES = TOOL_SPECS.filter((tool) => tool.defaultEnabled).map((tool) => tool.name);
@@ -92,6 +148,10 @@ export function availableToolNames(): string[] {
     if (tool.name === "fetch_url") return config.fetch.enabled;
     return true;
   }).map((tool) => tool.name);
+}
+
+export function toolSpec(name: string): ToolSpec | undefined {
+  return TOOL_SPECS.find((spec) => spec.name === name);
 }
 
 export function resolveToolNames(requested?: string[]): string[] {
@@ -137,6 +197,17 @@ export async function runTool(name: string, input: unknown): Promise<ToolRunResu
       if (!expression) return { output: "The calculator needs an `expression`.", isError: true };
       const value = evaluateExpression(expression);
       return { output: `${expression} = ${value}`, isError: false };
+    }
+
+    if (name === "convert_units") {
+      const record = (input ?? {}) as Record<string, unknown>;
+      const value = typeof record.value === "number" ? record.value : Number(record.value);
+      const from = asString(input, "from");
+      const to = asString(input, "to");
+      if (!Number.isFinite(value)) return { output: "convert_units needs a numeric `value`.", isError: true };
+      if (!from || !to) return { output: "convert_units needs `from` and `to` units.", isError: true };
+      const converted = convertUnits(value, from, to);
+      return { output: `${converted.text} (${converted.category})`, isError: false };
     }
 
     if (name === "current_time") {
@@ -195,6 +266,7 @@ export async function runTool(name: string, input: unknown): Promise<ToolRunResu
   } catch (error) {
     if (
       error instanceof ExpressionError ||
+      error instanceof UnitError ||
       error instanceof FetchError ||
       error instanceof SearchNotConfiguredError
     ) {

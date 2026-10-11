@@ -116,6 +116,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         loading: false,
         editingId: null,
       });
+      useUIStore.getState().clearToolRuns();
       useUIStore.getState().setPendingTools(data.chat.toolsEnabled ?? null);
     } catch (error) {
       set({
@@ -454,13 +455,49 @@ function handleEvent(event: Record<string, unknown>, streamingId: string, set: S
     return;
   }
 
+  if (type === "tool_approval") {
+    const id = event.id as string;
+    const name = (event.name as string) ?? "tool";
+    const input = event.input;
+
+    // tool_call_end already added the card; just move it to "awaiting approval".
+    update((message) => {
+      const parts = message.content.map((part) =>
+        part.kind === "tool_use" && part.id === id ? { ...part, status: "awaiting_approval" as const } : part
+      );
+      const exists = parts.some((part) => part.kind === "tool_use" && part.id === id);
+      return {
+        ...message,
+        content: exists
+          ? parts
+          : [...parts, { kind: "tool_use" as const, id, name, input, status: "awaiting_approval" as const }],
+      };
+    });
+
+    useUIStore.getState().startToolRun({
+      id,
+      name,
+      label: (event.label as string) ?? name,
+      input,
+      requiresApproval: Boolean(event.requiresApproval),
+      status: "approval",
+      stdout: "",
+      stderr: "",
+      figures: [],
+      files: [],
+    });
+    return;
+  }
+
   if (type === "tool_status") {
     const id = event.id as string;
     const status = event.status as "running" | "success" | "error";
     update((message) => ({
       ...message,
       content: message.content.map((part) =>
-        part.kind === "tool_use" && part.id === id ? { ...part, status } : part
+        part.kind === "tool_use" && part.id === id && part.status !== "denied"
+          ? { ...part, status }
+          : part
       ),
     }));
     return;

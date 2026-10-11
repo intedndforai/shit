@@ -505,6 +505,136 @@ check(
   `${toolParts.length} tool parts`
 );
 
+// --- Milestone 6b: browser-executed tools ----------------------------------
+
+check(
+  "client tools are advertised as running in the browser",
+  (toolsState.body?.specs ?? []).some(
+    (spec) => spec.name === "run_python" && spec.execution === "client" && spec.requiresApproval === true
+  ) &&
+    (toolsState.body?.available ?? []).includes("run_python") &&
+    (toolsState.body?.available ?? []).includes("convert_units"),
+  `${(toolsState.body?.specs ?? []).filter((spec) => spec.execution === "client").length} client tools`
+);
+check(
+  "code execution is approval-gated by default",
+  toolsState.body?.config?.code?.autoApprove === false
+);
+
+const staleResult = await jsonFetch("/api/chat/tool-result", {
+  method: "POST",
+  body: JSON.stringify({ id: "call_that_never_existed", output: "noop" }),
+});
+check("a stale tool result is rejected", staleResult.status === 404, `HTTP ${staleResult.status}`);
+
+const pythonChat = await jsonFetch("/api/chats", {
+  method: "POST",
+  body: JSON.stringify({ title: "Python round-trip" }),
+});
+const pythonChatId = pythonChat.body?.chat?.id;
+
+const pythonResponse = await fetch(`${appUrl}/api/chat`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    chatId: pythonChatId,
+    message: "please run python to multiply 21 by 2",
+    toolsEnabled: ["run_python"],
+  }),
+});
+
+const pythonEvents = [];
+let pythonText = "";
+let approval = null;
+let delivered = null;
+if (pythonResponse.ok && pythonResponse.body) {
+  const reader = pythonResponse.body.getReader();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let index = buf.indexOf("\n\n");
+    while (index !== -1) {
+      const chunk = buf.slice(0, index).trim();
+      buf = buf.slice(index + 2);
+      index = buf.indexOf("\n\n");
+      if (!chunk.startsWith("data:")) continue;
+      const event = JSON.parse(chunk.slice(5).trim());
+      pythonEvents.push(event);
+      if (event.type === "text_delta") pythonText += event.text;
+      if (event.type === "tool_approval" && !delivered) {
+        approval = event;
+        delivered = await jsonFetch("/api/chat/tool-result", {
+          method: "POST",
+          body: JSON.stringify({ id: event.id, output: "stdout:\n42\n", isError: false }),
+        });
+      }
+    }
+  }
+}
+
+check(
+  "the stream parks a code call until the browser answers",
+  Boolean(approval) && approval.name === "run_python" && approval.input?.code?.includes("21"),
+  approval ? String(approval.input.code).slice(0, 24) : "no tool_approval event"
+);
+check("the browser can hand the code result back", delivered?.status === 200, `HTTP ${delivered?.status}`);
+check(
+  "the model sees the code output and answers",
+  pythonText.includes("42") && pythonText.includes("run_python"),
+  pythonText.slice(0, 60)
+);
+
+const pythonTranscript = await jsonFetch(`/api/chats/${pythonChatId}`);
+const pythonParts = (pythonTranscript.body?.messages ?? [])
+  .flatMap((message) => message.content ?? [])
+  .filter((part) => part.kind === "tool_use" || part.kind === "tool_result");
+check(
+  "the code run is persisted with its result",
+  pythonParts.some((part) => part.kind === "tool_use" && part.name === "run_python" && part.status === "success") &&
+    pythonParts.some((part) => part.kind === "tool_result" && String(part.output).includes("42")),
+  `${pythonParts.length} parts`
+);
+
+const convertChat = await jsonFetch("/api/chats", {
+  method: "POST",
+  body: JSON.stringify({ title: "Unit conversion" }),
+});
+const convertResponse = await fetch(`${appUrl}/api/chat`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    chatId: convertChat.body?.chat?.id,
+    message: "please convert 26.2 miles to km",
+    toolsEnabled: ["convert_units"],
+  }),
+});
+let convertEvents = [];
+if (convertResponse.ok && convertResponse.body) {
+  const reader = convertResponse.body.getReader();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let index = buf.indexOf("\n\n");
+    while (index !== -1) {
+      const chunk = buf.slice(0, index).trim();
+      buf = buf.slice(index + 2);
+      index = buf.indexOf("\n\n");
+      if (!chunk.startsWith("data:")) continue;
+      convertEvents.push(JSON.parse(chunk.slice(5).trim()));
+    }
+  }
+}
+const convertResult = convertEvents.find((event) => event.type === "tool_result");
+check(
+  "unit conversion runs server-side",
+  Boolean(convertResult) && !convertResult.isError && String(convertResult.output).includes("42.16"),
+  convertResult ? String(convertResult.output).slice(0, 40) : "no tool_result"
+);
+
 const failed = results.filter((result) => !result.ok);
 console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
 process.exitCode = failed.length === 0 ? 0 : 1;

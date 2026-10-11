@@ -69,6 +69,15 @@ function artifactReply(question) {
   ].join("\n");
 }
 
+/** Name of the tool the assistant asked for in the previous round. */
+function lastToolName(messages) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const calls = messages[index]?.tool_calls;
+    if (Array.isArray(calls) && calls.length && calls[0]?.function?.name) return calls[0].function.name;
+  }
+  return null;
+}
+
 /** Returns the frames to stream plus the text (for usage accounting). */
 function buildFrames(body) {
   const messages = Array.isArray(body.messages) ? body.messages : [];
@@ -83,7 +92,8 @@ function buildFrames(body) {
       .map((message) => messageText(message))
       .join("\n")
       .trim();
-    const text = `The calculator returned ${output}. (Mock provider: this is a real tool round-trip through Conduit.)`;
+    const toolName = lastToolName(messages) ?? "The tool";
+    const text = `${toolName} returned ${output}. (Mock provider: this is a real tool round-trip through Conduit.)`;
     return { frames: text.split(" ").map((word, index) => ({ content: `${index === 0 ? "" : " "}${word}` })), text };
   }
 
@@ -93,6 +103,35 @@ function buildFrames(body) {
       frames: [
         { tool_calls: [{ index: 0, id: "call_mock_1", function: { name: "calculator", arguments: '{"expression":' } }] },
         { tool_calls: [{ index: 0, function: { arguments: '"21*2"}' } }] },
+      ],
+      text: "",
+      finishReason: "tool_calls",
+    };
+  }
+
+  if (hasTools && /python|multiply|code/i.test(question)) {
+    return {
+      frames: [
+        { tool_calls: [{ index: 0, id: "call_mock_py", function: { name: "run_python", arguments: '{"code":' } }] },
+        { tool_calls: [{ index: 0, function: { arguments: '"print(21 * 2)"}' } }] },
+      ],
+      text: "",
+      finishReason: "tool_calls",
+    };
+  }
+
+  if (hasTools && /convert/i.test(question)) {
+    return {
+      frames: [
+        {
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_mock_convert",
+              function: { name: "convert_units", arguments: '{"value":26.2,"from":"mi","to":"km"}' },
+            },
+          ],
+        },
       ],
       text: "",
       finishReason: "tool_calls",

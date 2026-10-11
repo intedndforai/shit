@@ -14,7 +14,9 @@ import {
 import { getActivePath, lastUserMessage, nextBranchIndex, setActiveLeaf } from "@/lib/server/branches";
 import { connectionFromProvider, findModel, getDefaultModel, getProvider } from "@/lib/server/providers";
 import { recordArtifacts } from "@/lib/server/artifacts";
-import { resolveToolNames, runTool, toolDefinitions, type ToolCitation } from "@/lib/tools/registry";
+import { resolveToolNames, runTool, toolDefinitions, toolSpec, type ToolCitation } from "@/lib/tools/registry";
+import { readToolsConfig } from "@/lib/tools/web-search";
+import { waitForClientTool } from "@/lib/server/pending-tools";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -83,6 +85,14 @@ type OutgoingEvent =
   | { type: "chat"; chatId: string; title: string | null }
   | { type: "message_ids"; assistantMessageId: string }
   | { type: "tool_status"; id: string; name: string; status: "running" | "success" | "error" }
+  | {
+      type: "tool_approval";
+      id: string;
+      name: string;
+      label: string;
+      input: unknown;
+      requiresApproval: boolean;
+    }
   | {
       type: "tool_result";
       id: string;
@@ -315,20 +325,51 @@ export async function POST(request: Request) {
           history.push({ role: "assistant", content: assistantContent });
 
           const resultParts: ContentPart[] = [];
-          for (const [id, call] of pending) {
-            send({ type: "tool_status", id, name: call.name, status: "running" });
-            const result = await runTool(call.name, call.input);
-
+          let stopped = false;
+          const markUse = (id: string, status: "success" | "error" | "awaiting_approval" | "denied", error?: string) => {
             const index = timeline.findIndex((part) => part.kind === "tool_use" && part.id === id);
-            if (index >= 0 && timeline[index].kind === "tool_use") {
-              const part = timeline[index];
-              if (part.kind === "tool_use") {
-                timeline[index] = {
-                  ...part,
-                  status: result.isError ? "error" : "success",
-                  ...(result.isError ? { error: result.output.slice(0, 400) } : {}),
-                };
+            if (index < 0 || timeline[index].kind !== "tool_use") return;
+            const part = timeline[index] as Extract<ContentPart, { kind: "tool_use" }>;
+            timeline[index] = { ...part, status, ...(error ? { error: error.slice(0, 400) } : {}) };
+          };
+
+          for (const [id, call] of pending) {
+            const spec = toolSpec(call.name);
+            let result: Awaited<ReturnType<typeof runTool>>;
+
+            if (spec?.execution === "client") {
+              // The browser runs this tool. The page posts the outcome to
+              // /api/chat/tool-result, which unblocks waitForClientTool.
+              markUse(id, "awaiting_approval");
+              send({
+                type: "tool_approval",
+                id,
+                name: call.name,
+                label: spec.label,
+                input: call.input,
+                requiresApproval: spec.requiresApproval !== false && !readToolsConfig().code.autoApprove,
+              });
+
+              const outcome = await waitForClientTool(id, { signal: ac.signal });
+              if (outcome.status === "cancelled") {
+                stopped = true;
+                break;
               }
+
+              if (outcome.status === "denied") {
+                markUse(id, "denied", "Declined by the user.");
+                result = { output: "The user declined to run this tool. Continue without its result.", isError: true };
+              } else if (outcome.status === "timeout") {
+                markUse(id, "error", "Timed out waiting for the user.");
+                result = { output: "The tool timed out before it ran.", isError: true };
+              } else {
+                markUse(id, outcome.isError ? "error" : "success", outcome.isError ? outcome.output : undefined);
+                result = { output: outcome.output, isError: outcome.isError };
+              }
+            } else {
+              send({ type: "tool_status", id, name: call.name, status: "running" });
+              result = await runTool(call.name, call.input);
+              markUse(id, result.isError ? "error" : "success", result.isError ? result.output : undefined);
             }
 
             const resultPart: ContentPart = {
@@ -352,6 +393,7 @@ export async function POST(request: Request) {
           }
 
           history.push({ role: "tool", content: resultParts });
+          if (stopped) break;
         }
       } catch (error) {
         errored = ac.signal.aborted

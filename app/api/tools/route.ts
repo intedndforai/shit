@@ -18,6 +18,7 @@ const configSchema = z.object({
     })
     .optional(),
   fetch: z.object({ enabled: z.boolean().optional() }).optional(),
+  code: z.object({ autoApprove: z.boolean().optional() }).optional(),
   /** Write-only: never echoed back. `null` clears the stored secret. */
   searchApiKey: z.string().trim().max(400).nullable().optional(),
 });
@@ -34,6 +35,8 @@ interface ToolsPayload {
     defaultEnabled: boolean;
     requiresConfig: boolean;
     configured: boolean;
+    execution: "server" | "client";
+    requiresApproval: boolean;
     parameters: Record<string, unknown>;
   }>;
 }
@@ -58,6 +61,8 @@ function payload(): ToolsPayload {
       defaultEnabled: tool.defaultEnabled,
       requiresConfig: Boolean(tool.requiresConfig),
       configured: available.includes(tool.name),
+      execution: tool.execution ?? "server",
+      requiresApproval: Boolean(tool.requiresApproval),
       parameters: definitions.get(tool.name)?.parameters ?? {},
     })),
   };
@@ -85,6 +90,7 @@ export async function PATCH(request: Request) {
     setSetting("tools.config", {
       webSearch: { ...current.webSearch, ...(parsed.data.webSearch ?? {}) },
       fetch: { ...current.fetch, ...(parsed.data.fetch ?? {}) },
+      code: { ...current.code, ...(parsed.data.code ?? {}) },
     });
 
     if (parsed.data.searchApiKey !== undefined) {

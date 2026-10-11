@@ -54,8 +54,9 @@ What works today:
 - Models can call tools. Enable them per chat from the composer’s wrench menu: **web search**
   (Tavily, Brave, Serper, or a self-hosted SearXNG — configured in Settings → Tools),
   **fetch URL** (SSRF-guarded, text-only, 1 MB cap), a **calculator** that never uses `eval`, and
-  **CSV / table analysis**. Calls stream into the transcript as collapsible cards with their
-  output and any sources, and the model keeps working until it has an answer.
+  **CSV / table analysis**. Runs Python and JavaScript too, in your browser with your approval.
+  Tool calls stream into the transcript as collapsible cards with their output and any sources,
+  and the model keeps working until it has an answer.
 - Light / dark / system themes and a user-selectable accent color.
 
 ## Screenshots

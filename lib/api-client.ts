@@ -157,6 +157,9 @@ export interface ToolSpecDto {
   defaultEnabled: boolean;
   requiresConfig: boolean;
   configured: boolean;
+  /** "client" tools run in the browser and need the page to post their result. */
+  execution: "server" | "client";
+  requiresApproval: boolean;
   parameters: Record<string, unknown>;
 }
 
@@ -164,6 +167,7 @@ export interface ToolsState {
   config: {
     webSearch: { enabled: boolean; provider: "tavily" | "brave" | "serper" | "searxng"; baseUrl?: string; maxResults: number };
     fetch: { enabled: boolean };
+    code: { autoApprove: boolean };
   };
   hasSearchApiKey: boolean;
   maskedSearchApiKey: string;
@@ -234,6 +238,9 @@ export const api = {
     return upload<{ file: UploadedFile }>("/api/files", form);
   },
   getFileUrl: (id: string) => `/api/files/${id}`,
+
+  postToolResult: (input: { id: string; decision?: "run" | "deny"; output?: string; isError?: boolean }) =>
+    request<{ ok: true }>("/api/chat/tool-result", { method: "POST", body: JSON.stringify(input) }),
 
   getTools: () => request<ToolsState>("/api/tools"),
   updateTools: (input: unknown) => request<ToolsState>("/api/tools", { method: "PATCH", body: JSON.stringify(input) }),

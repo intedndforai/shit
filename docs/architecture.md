@@ -121,6 +121,9 @@ implementations `runTool` can actually execute.
 | --- | --- | --- |
 | `calculator` | Recursive-descent parser in `lib/tools/math.ts` | No `eval`; grammar limited to numbers, `+ - * / % ^`, parentheses, and a fixed function list |
 | `fetch_url` | `lib/tools/fetch-url.ts` | DNS is resolved first and private/loopback/link-local ranges (IPv4 and IPv6) are refused; 1 MB response cap, 20k characters returned, ≤ 3 redirects |
+| `convert_units` | `lib/tools/units.ts` | Factor/affine tables for length, mass, volume, time, area, speed, data, energy, and temperature |
+| `run_python` | Pyodide in a Web Worker (`public/code-workers/python-worker.js`) | **Runs in the browser.** numpy/pandas/matplotlib fetched on demand from the Pyodide CDN; figures and files come back to the transcript; requires user approval |
+| `run_javascript` | Sandboxed Web Worker (`public/code-workers/js-worker.js`) | **Runs in the browser.** No DOM, no network (fetch/XHR/WebSocket/EventSource/importScripts removed) |
 | `web_search` | `lib/tools/web-search.ts` | Tavily / Brave / Serper / SearXNG behind one interface; key is encrypted at rest and never sent to the browser |
 | `csv_stats` | `lib/tools/csv-stats.ts` | Character-level CSV/TSV parser (quoted fields, embedded newlines) — no dependency, no shell |
 
@@ -135,6 +138,17 @@ streams another turn. Each step reaches the browser as SSE — `tool_call_start`
 `tool_status`, `tool_result` (with citations) — and the final transcript is persisted as ordered
 content parts (`thinking`, `text`, `tool_use`, `tool_result`), so a reloaded chat keeps the cards.
 Search results carry their URLs into `citations`, which the UI renders under the answer.
+
+Code tools execute on the user’s machine by design. When the model calls `run_python` or
+`run_javascript`, the route streams a `tool_approval` event and parks the call in
+`lib/server/pending-tools.ts`; the browser shows the code and “Run / Skip” controls, runs it in a
+worker, and posts the outcome to `POST /api/chat/tool-result`, which unblocks the stream. The
+parking state lives on `globalThis` because Next.js bundles route handlers separately — fine for
+the single-process deployments Conduit targets, and a documented constraint. A Settings → Tools
+toggle (“Run code without asking”) lets the user skip the prompt; every prompt is skippable, and
+timeouts (10 minutes) and stream aborts resolve the wait so the model can answer without the tool.
+Python timeouts (5 minutes in the runner) terminate the worker; the next run downloads the runtime
+again, which is why warm-up happens lazily.
 
 ## Provider contract
 

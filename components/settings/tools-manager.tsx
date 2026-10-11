@@ -76,8 +76,9 @@ export function ToolsManager() {
           Tools
         </CardTitle>
         <CardDescription>
-          Models can search the web, read a URL, calculate, tell the time, and analyse CSV data. Nothing is
-          called until you enable it and a model asks for it.
+          Models can search the web, read a URL, calculate, convert units, tell the time, analyse CSV data,
+          and run Python or JavaScript. Server-side tools need an API key here; code always runs in your
+          browser, and nothing is called until a model asks for it.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
@@ -172,13 +173,33 @@ export function ToolsManager() {
           />
         </div>
 
+        <div className="flex items-center justify-between gap-3 border-t border-border pt-4">
+          <div>
+            <Label htmlFor="code-auto-approve">Run code without asking</Label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              By default the model has to ask before Python or JavaScript runs in your browser. Turning this on
+              approves every code call in a chat automatically.
+            </p>
+          </div>
+          <Switch
+            id="code-auto-approve"
+            checked={state.config.code.autoApprove}
+            onCheckedChange={(checked) =>
+              void save(
+                { code: { autoApprove: checked } },
+                checked ? "Code runs without asking." : "Code will ask first."
+              )
+            }
+          />
+        </div>
+
         <div className="flex flex-col gap-2 border-t border-border pt-4">
           <p className="text-xs font-medium text-muted-foreground">Built-in tools</p>
           <ul className="flex flex-col gap-1.5">
             {state.specs.map((spec) => (
               <li key={spec.name} className="flex items-start gap-2 text-xs">
                 <Badge variant={spec.configured ? "outline" : "warning"} className="mt-0.5 shrink-0">
-                  {spec.configured ? "ready" : "needs setup"}
+                  {spec.configured ? (spec.execution === "client" ? "in-browser" : "ready") : "needs setup"}
                 </Badge>
                 <span className="min-w-0">
                   <span className="font-medium">{spec.label}</span>

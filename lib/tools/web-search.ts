@@ -19,6 +19,8 @@ export interface ToolsConfig {
     maxResults: number;
   };
   fetch: { enabled: boolean };
+  /** Browser-side code runners (Python/JavaScript) ask before running by default. */
+  code: { autoApprove: boolean };
 }
 
 export interface ToolsSecrets {
@@ -28,6 +30,7 @@ export interface ToolsSecrets {
 export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
   webSearch: { enabled: false, provider: "tavily", maxResults: 5 },
   fetch: { enabled: true },
+  code: { autoApprove: false },
 };
 
 export function readToolsConfig(): ToolsConfig {
@@ -35,6 +38,7 @@ export function readToolsConfig(): ToolsConfig {
   return {
     webSearch: { ...DEFAULT_TOOLS_CONFIG.webSearch, ...(stored?.webSearch ?? {}) },
     fetch: { ...DEFAULT_TOOLS_CONFIG.fetch, ...(stored?.fetch ?? {}) },
+    code: { ...DEFAULT_TOOLS_CONFIG.code, ...(stored?.code ?? {}) },
   };
 }
 
