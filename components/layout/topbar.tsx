@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ShortcutsDialog } from "@/components/layout/shortcut-dialog";
 import { useUIStore } from "@/lib/store/ui-store";
 import { useChatStore } from "@/lib/store/chat-store";
 import { useRouter } from "next/navigation";
@@ -141,6 +142,7 @@ export function Topbar() {
           <TooltipContent>New chat</TooltipContent>
         </Tooltip>
 
+        <ShortcutsDialog />
         <ThemeToggle />
       </div>
     </header>

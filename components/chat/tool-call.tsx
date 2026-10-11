@@ -220,8 +220,17 @@ function ServerApprovalPanel({ call }: { call: ToolUsePart }) {
       <div className="flex items-center gap-2">
         <ShieldCheck className="size-3.5 shrink-0 text-accent" />
         <span className="font-medium">Run {run?.label ?? humanise(call.name)}?</span>
-        <span className="min-w-0 flex-1 truncate text-muted-foreground">Runs on the server with your saved settings.</span>
+        <span className="min-w-0 flex-1 truncate text-muted-foreground">
+          {run?.egress?.kind === "thirdParty"
+            ? `Sends this payload to ${run.egress.destination ?? "a third party"}.`
+            : run?.egress?.kind === "local"
+              ? "Runs locally."
+              : "Runs on the server with your saved settings."}
+        </span>
       </div>
+      {run?.egress?.note ? (
+        <p className="mt-1 text-[11px] text-muted-foreground">{run.egress.note}</p>
+      ) : null}
       {summariseInput(call.input) ? (
         <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-secondary/60 p-2 text-[11px]">
           {JSON.stringify(call.input ?? {}, null, 2)}

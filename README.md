@@ -29,6 +29,7 @@ format. Requests go through your own server, so keys never reach the browser.
 | **M9** | MCP client, custom tools, Deep Research | ✅ Shipped |
 | M10 | Voice, accessibility, PWA, shortcuts, mobile polish | ⏳ Planned |
 | M11 | Multi-user auth, sharing, usage dashboard, Docker, tests | ⏳ Partial (Docker, single-user mode) |
+| **Privacy** | Privacy modes, reversible redaction, provider policy gate, metadata-only egress log, send inspector, one-click delete | ✅ Shipped |
 
 What works today:
 
@@ -247,6 +248,43 @@ docs/                Architecture notes and screenshots
 | `npm run mock:provider` | Start the local mock provider on port 4123. |
 | `npm run smoke` | Run the end-to-end API checks (100+) against a running app. |
 | `npm run files:check` | Verify upload/extraction handling. |
+| `npm run artifacts:check` | Verify artifact capture, versioning and image routing (needs dev + mock provider). |
+| `npm run privacy:check` | Verify privacy modes, reversible redaction, the policy gate and the egress log (needs dev + mock provider). |
+| `npm run redact:check` | Unit-check the reversible redaction engine. |
+
+## Privacy
+
+Conduit adds a privacy-first layer on top of the normal chat flow. Nothing here is a promise about a
+third party: it describes what this app does before a request leaves your machine. The full data-flow
+map lives in [PRIVACY.md](PRIVACY.md).
+
+**Modes.** Every chat runs in one of four modes (per chat, or set as the workspace default in
+Settings → Privacy):
+
+| Mode | Stored? | Redaction | Provider policy gate | Third-party tools |
+| --- | --- | --- | --- | --- |
+| Standard | Yes | Off | Not enforced | Allowed |
+| Private | Yes | Reversible | Enforced (blocks, or asks once) | Ask every time |
+| Incognito | No | Off | Not enforced | Allowed |
+| Strict Local | Yes | Reversible | Local endpoints only | Disabled |
+
+**Reversible redaction.** In Private and Strict Local mode, emails, phone numbers, cards, IBANs, keys,
+tokens, JWTs, PEM blocks, user paths, IP addresses and your own custom terms are replaced with
+placeholders before the request is sent. The provider only ever sees the placeholder; the reply is
+restored on this side before it is shown and before it is saved.
+
+**Credentials never leave by default.** A detected password, API key or token blocks the send with a
+dedicated dialog until you explicitly allow it once. The blocked turn is not persisted.
+
+**Egress log.** Every outbound request — the model call, search, fetch, MCP and custom tools — is
+recorded with its destination host, a redaction count and a SHA-256 of the payload. The log never
+stores the prompt, the query, a file name or a header value.
+
+**Delete everything.** The Privacy Center can purge chats older than a retention window, clear the
+egress log, and delete every chat, message, artifact, memory, project and usage row (with
+`PRAGMA secure_delete` plus a VACUUM, so the bytes are gone). Providers are kept unless you opt in.
+
+See [PRIVACY.md](PRIVACY.md) for the exact storage, egress and deletion behaviour.
 
 ## Security
 
@@ -256,6 +294,9 @@ docs/                Architecture notes and screenshots
 - Ongoing hardening on the roadmap: CSRF tokens for state-changing routes, strict CSP + security
   headers, DOMPurify for rendered HTML, SSRF guards on the fetch tool, upload type/size validation,
   and sandboxed iframes for artifacts.
+- The privacy layer (modes, redaction, the egress log and one-click deletion) is documented in
+  [PRIVACY.md](PRIVACY.md). Redaction is a safety net, not a guarantee: read the reply, and never
+  paste a live secret into a chat.
 - Conduit is single-user by default and binds to your machine; optional multi-user auth arrives in M11.
 
 ## Contributing
@@ -265,6 +306,7 @@ Issues and pull requests are welcome. Before opening a PR:
 ```bash
 npm run typecheck && npm run lint && npm run smoke
 npm run files:check    # with dev + mock provider running
+npm run privacy:check  # with dev + mock provider running (resets the dev DB)
 ```
 
 Keep adapters vendor-neutral: new formats belong in `lib/providers/` behind the existing

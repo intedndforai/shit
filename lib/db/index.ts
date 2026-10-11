@@ -28,6 +28,9 @@ function createDb(): BetterSQLite3Database<typeof schema> {
   const sqlite = new Database(sqlitePath);
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
+  // Section 3.2: overwrite freed pages so deleted content is not recoverable
+  // from the database file.
+  sqlite.pragma("secure_delete = ON");
 
   const db = drizzle(sqlite, { schema });
 
@@ -54,6 +57,21 @@ export function dbHealth(): { ok: boolean; path: string } {
   } catch {
     return { ok: false, path: resolveSqlitePath() };
   }
+}
+
+/**
+ * Checkpoint the write-ahead log and rebuild the database file. Called after
+ * bulk deletes ("delete all my data", retention purge) so freed bytes leave the
+ * file instead of lingering in the WAL or on free pages.
+ */
+export function vacuumDatabase(): void {
+  const db = getDb();
+  try {
+    db.run(sql`PRAGMA wal_checkpoint(TRUNCATE)`);
+  } catch {
+    /* another connection may hold the WAL; the VACUUM below still runs */
+  }
+  db.run(sql`VACUUM`);
 }
 
 export { schema };

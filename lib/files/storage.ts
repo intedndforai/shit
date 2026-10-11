@@ -6,6 +6,9 @@ import path from "node:path";
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 export const MAX_EXTRACTED_CHARS = 200_000;
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+export const MAX_ZIP_ENTRIES = 400;
+export const MAX_ZIP_ENTRY_BYTES = 12 * 1024 * 1024;
+export const MAX_ZIP_TOTAL_BYTES = 60 * 1024 * 1024;
 
 export function uploadsDir(): string {
   return path.join(process.cwd(), "data", "uploads");

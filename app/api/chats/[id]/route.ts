@@ -32,6 +32,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
         styleId: chat.styleId,
         projectId: chat.projectId,
         incognito: chat.incognito,
+        privacyMode: chat.privacyMode,
         pinned: chat.pinned,
         archived: chat.archived,
         activeLeafId: chat.activeLeafId,

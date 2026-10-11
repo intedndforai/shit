@@ -22,6 +22,7 @@ import {
   Plus,
   Search,
   Settings,
+  ShieldCheck,
   Trash2,
   Upload,
   Waypoints,
@@ -64,6 +65,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/", label: "Chats", icon: MessageSquare },
   { href: "/projects", label: "Projects", icon: FolderKanban },
   { href: "/artifacts", label: "Artifacts", icon: Blocks },
+  { href: "/privacy", label: "Privacy", icon: ShieldCheck },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

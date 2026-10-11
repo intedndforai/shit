@@ -18,6 +18,7 @@ export const chatPatchSchema = z.object({
   styleId: z.string().nullable().optional(),
   projectId: z.string().nullable().optional(),
   incognito: z.boolean().optional(),
+  privacyMode: z.enum(["standard", "private", "incognito", "local"]).optional(),
   pinned: z.boolean().optional(),
   archived: z.boolean().optional(),
 });
@@ -29,6 +30,7 @@ export interface ChatSummary {
   title: string | null;
   modelId: string | null;
   providerId: string | null;
+  privacyMode: string;
   pinned: boolean;
   archived: boolean;
   updatedAt: number;
@@ -60,6 +62,7 @@ export function listChats(): ChatSummary[] {
     title: row.title,
     modelId: row.modelId,
     providerId: row.providerId,
+    privacyMode: row.privacyMode,
     pinned: row.pinned,
     archived: row.archived,
     updatedAt: row.updatedAt.getTime(),
@@ -76,6 +79,7 @@ export function createChat(input: {
   projectId?: string | null;
   styleId?: string | null;
   incognito?: boolean;
+  privacyMode?: "standard" | "private" | "incognito" | "local";
   toolsEnabled?: string[] | null;
 }): Chat {
   return getDb()
@@ -87,7 +91,8 @@ export function createChat(input: {
       systemPrompt: input.systemPrompt ?? null,
       projectId: input.projectId ?? null,
       styleId: input.styleId ?? null,
-      incognito: input.incognito ?? false,
+      incognito: input.incognito ?? input.privacyMode === "incognito",
+      privacyMode: input.privacyMode ?? (input.incognito ? "incognito" : "standard"),
       toolsEnabled: input.toolsEnabled ?? null,
     })
     .returning()
@@ -119,6 +124,9 @@ export function updateChat(
   // A title set through the API is a human decision unless the caller says
   // otherwise (the title generator passes "model").
   if (patch.title !== undefined) values.titleSource = options.titleSource ?? "user";
+  // Keep the legacy incognito flag in sync with the mode.
+  if (patch.privacyMode !== undefined) values.incognito = patch.privacyMode === "incognito";
+  else if (patch.incognito !== undefined && patch.incognito) values.privacyMode = "incognito";
   return getDb().update(chats).set(values).where(eq(chats.id, id)).returning().get();
 }
 

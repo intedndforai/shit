@@ -11,6 +11,7 @@ import { ModelRolesManager } from "@/components/settings/model-roles";
 import { PresetsManager } from "@/components/settings/presets-manager";
 import { ProfileManager } from "@/components/settings/profile-manager";
 import { PromptsManager } from "@/components/settings/prompts-manager";
+import { SkillsManager } from "@/components/settings/skills-manager";
 import { StylesManager } from "@/components/settings/styles-manager";
 import { ThemeSelect } from "@/components/settings/theme-select";
 import { Badge } from "@/components/ui/badge";
@@ -67,6 +68,8 @@ export default function SettingsPage() {
       <MemoryManager />
 
       <PromptsManager />
+
+      <SkillsManager />
 
       <ToolsManager />
 

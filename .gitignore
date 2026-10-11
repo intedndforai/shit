@@ -5,6 +5,7 @@
 
 # next.js
 /.next/
+/.next-build/
 /out/
 next-env.d.ts
 
@@ -50,4 +51,5 @@ yarn-error.log*
 
 # local scratch files
 .tmp-*
+/.tmp/
 

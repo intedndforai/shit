@@ -1,6 +1,23 @@
 import { z } from "zod";
 import type { ContentPart } from "@/lib/db/schema";
 import { getAdapter, ProviderError, type InternalMessage, type StreamEvent } from "@/lib/providers";
+import { isLocalEndpoint, policyGate, redactMessages, summarizeRedactions } from "@/lib/privacy/pipeline";
+import {
+  credentialMatches,
+  PlaceholderRestorer,
+  redactText,
+  restoreText,
+  type RedactionEntry,
+} from "@/lib/privacy/redact";
+import type { PrivacyMode, RedactionSummary } from "@/lib/privacy/types";
+import {
+  getPrivacySettings,
+  policyLabel,
+  policyOf,
+  recordEgress,
+  redactionActive,
+  redactionOptionsFromSettings,
+} from "@/lib/server/privacy";
 import { jsonError, jsonOk, parseJson, errorResponse } from "@/lib/server/api";
 import {
   appendMessage,
@@ -20,11 +37,22 @@ import {
   getProvider,
 } from "@/lib/server/providers";
 import { recordArtifacts } from "@/lib/server/artifacts";
-import { resolveToolNames, runTool, toolDefinitions, toolSpec, type ToolCitation } from "@/lib/tools/registry";
-import { readToolsConfig } from "@/lib/tools/web-search";
+import { linkAttachments } from "@/lib/files/store";
+import {
+  isLocallyPermittedTool,
+  resolveToolNames,
+  toolEgressKind,
+  runTool,
+  toolDefinitions,
+  toolEgress,
+  toolSpec,
+  type ToolCitation,
+} from "@/lib/tools/registry";
+import { readToolsConfig, searchDestination } from "@/lib/tools/web-search";
 import { waitForClientTool } from "@/lib/server/pending-tools";
 import { styleInstructions } from "@/lib/server/styles";
 import { getProject, retrieveProjectContext, type RetrievedPassage } from "@/lib/server/projects";
+import { activeSkillInstructions } from "@/lib/server/skills";
 import {
   addMemory,
   extractMemoryProposals,
@@ -54,6 +82,8 @@ const contentPartSchema = z.object({
   alt: z.string().optional(),
   name: z.string().optional(),
   mime: z.string().optional(),
+  /** Stored attachment this part came from, when it was uploaded first. */
+  attachmentId: z.string().optional(),
 });
 
 const bodySchema = z.object({
@@ -75,6 +105,9 @@ const bodySchema = z.object({
   toolsEnabled: z.array(z.string()).nullable().optional(),
   /** Deep Research: plan, search, fetch, then answer with citations. */
   research: z.boolean().optional(),
+  /** One-time overrides for the privacy gate (Sections 3.4, 3.6, 3.14). */
+  allowPolicyOnce: z.boolean().optional(),
+  allowCredentials: z.boolean().optional(),
   /**
    * Transcript sent by the client. Only used for incognito chats, which never
    * touch the database, so their context lives in the tab that owns them.
@@ -101,18 +134,26 @@ function toContentParts(
         alt?: string;
         name?: string;
         mime?: string;
+        attachmentId?: string;
       }>
 ) {
   if (typeof message === "string") return [{ kind: "text" as const, text: message }];
   return message.map((part) => {
     if (part.kind === "text") return { kind: "text" as const, text: part.text ?? "" };
     if (part.kind === "image")
-      return { kind: "image" as const, dataUrl: part.dataUrl, url: part.url, alt: part.alt };
+      return {
+        kind: "image" as const,
+        dataUrl: part.dataUrl,
+        url: part.url,
+        alt: part.alt,
+        attachmentId: part.attachmentId,
+      };
     return {
       kind: "document" as const,
       name: part.name ?? "document",
       mime: part.mime ?? "text/plain",
       text: part.text,
+      attachmentId: part.attachmentId,
     };
   });
 }
@@ -136,6 +177,7 @@ type OutgoingEvent =
       sources: Array<{ title: string; snippet: string }>;
     }
   | { type: "memory"; fact: string }
+  | { type: "redactions"; summary: RedactionSummary }
   | { type: "research_step"; id: string; label: string; status: string; detail?: string }
   | {
       type: "research_sources";
@@ -151,6 +193,8 @@ type OutgoingEvent =
       requiresApproval: boolean;
       /** Server tools ask for a decision; client tools run in the browser. */
       execution: "server" | "client";
+      /** Where the approved call would send data (Section 3.10). */
+      egress: { kind: "none" | "local" | "thirdParty"; destination?: string; note?: string };
     }
   | {
       type: "tool_result";
@@ -192,6 +236,20 @@ export async function POST(request: Request) {
   if (!initialProvider) return jsonError("The provider for this model no longer exists.", 409);
   let provider: typeof initialProvider = initialProvider;
 
+  // Image routing: an image may only be sent to a model the user marked as
+  // vision-capable. This is the enforcement point; the composer warns earlier.
+  const incomingParts = typeof body.message === "string" ? [] : body.message ?? [];
+  const historyParts = (body.history ?? []).flatMap((message) => message.content);
+  if (
+    [...incomingParts, ...historyParts].some((part) => part.kind === "image") &&
+    model.capabilities?.vision !== true
+  ) {
+    return jsonError(
+      `"${model.displayName ?? model.externalId}" is not configured for vision, so the image was not sent. Pick a vision-capable model for this turn, or enable vision for this model in Settings.`,
+      409
+    );
+  }
+
 
   if (!chat) {
     chat = createChat({
@@ -206,16 +264,104 @@ export async function POST(request: Request) {
 
   const chatId = chat.id;
 
+  // --- Privacy mode, policy gate, and credentials (Sections 3.3-3.6) -----
+  const privacySettings = getPrivacySettings();
+  const mode = (chat.privacyMode ?? "standard") as PrivacyMode;
+  const ephemeral = chat.incognito || mode === "incognito";
+  const redactEnabled = redactionActive(mode);
+  const redactOptions = redactionOptionsFromSettings(privacySettings);
+  const providerIsLocal = isLocalEndpoint(provider.baseUrl);
+  const gate = policyGate({
+    policy: policyOf(provider),
+    providerLabel: provider.name,
+    mode,
+    minimum: privacySettings.minimumProviderPolicy,
+    isLocalEndpoint: providerIsLocal,
+  });
+
+  if (mode === "local" && !providerIsLocal) {
+    recordEgress({
+      chatId,
+      providerId: provider.id,
+      kind: "provider",
+      destination: (() => {
+        try {
+          return new URL(provider.baseUrl).hostname;
+        } catch {
+          return provider.baseUrl;
+        }
+      })(),
+      label: `${provider.name} · ${model.externalId}`,
+      mode,
+      status: "blocked",
+    });
+    return jsonError(
+      `Strict Local mode only allows loopback or private-network model endpoints, and "${provider.name}" points at a remote host. Switch this chat to Standard or Private, or point the provider at a local endpoint such as Ollama, LM Studio, or vLLM.`,
+      409,
+      { code: "strict-local", provider: { id: provider.id, name: provider.name }, options: gate.options }
+    );
+  }
+
+  if (mode === "private" && !gate.allowed && !body.allowPolicyOnce) {
+    recordEgress({
+      chatId,
+      providerId: provider.id,
+      kind: "provider",
+      destination: providerIsLocal ? "local" : (() => {
+        try {
+          return new URL(provider.baseUrl).hostname;
+        } catch {
+          return provider.baseUrl;
+        }
+      })(),
+      label: `${provider.name} · ${model.externalId}`,
+      mode,
+      status: "blocked",
+    });
+    return jsonError(
+      `Private mode blocked this send: ${gate.reasons.join(" ")} (Provider policy is user-declared and never verified by Conduit.)`,
+      409,
+      { code: "policy-gate", gate, policy: policyOf(provider), policyLabel: policyLabel(policyOf(provider), providerIsLocal) }
+    );
+  }
+
   // A tool selection sent with the turn is remembered on the chat.
   if (body.toolsEnabled !== undefined) {
     chat = updateChat(chatId, { toolsEnabled: body.toolsEnabled }) ?? chat;
+  }
+
+  // Credentials default to block-and-ask: never send a detected credential
+  // unless the user explicitly allows it once (Section 3.6). This runs before
+  // the turn is persisted, so a blocked send leaves no stray message behind.
+  if (redactEnabled) {
+    const scanParts: Array<{ kind: string; text?: string }> = [
+      ...(typeof body.message === "string"
+        ? [{ kind: "text", text: body.message }]
+        : (body.message ?? []).map((part) => ({ kind: part.kind, text: part.text }))),
+      ...(body.history ?? [])
+        .flatMap((message) => message.content)
+        .map((part) => ({ kind: part.kind, text: part.text })),
+    ];
+    const scanText = [chat.systemPrompt ?? "", ...scanParts.map((part) => part.text ?? "")].join("\n\n");
+    const credentials = summarizeRedactions(credentialMatches(scanText, redactOptions)).items;
+    if (credentials.length && !body.allowCredentials) {
+      return jsonError(
+        `This turn looks like it contains ${
+          credentials.length === 1 ? "a credential" : "credentials"
+        }. Conduit will not send ${
+          credentials.length === 1 ? "it" : "them"
+        } without your explicit permission. Allow once to send it, or remove it from the message.`,
+        409,
+        { code: "credentials", credentials }
+      );
+    }
   }
 
   // --- Place the new turn in the message tree ------------------------------
   let contextRows = getActivePath(chatId);
   let parentId: string | null = null;
 
-  const incognito = chat.incognito;
+  const incognito = ephemeral;
   let pendingUserParts: ContentPart[] | null = null;
 
   if (body.message && incognito) {
@@ -232,6 +378,8 @@ export async function POST(request: Request) {
       branchIndex: nextBranchIndex(chatId, parentId),
     });
     setActiveLeaf(chatId, userRow.id);
+    // Tie the uploaded files to the message that carried them.
+    linkAttachments(chatId, userRow.id, parts);
     parentId = userRow.id;
 
     if (!chat.title) {
@@ -272,9 +420,23 @@ export async function POST(request: Request) {
   if (profile) contextBlocks.push(profile);
   const style = styleInstructions(chat.styleId);
   if (style) contextBlocks.push(`Response style: ${style}`);
+
+  // Built-in artifact instruction (M5): a self-contained deliverable can be
+  // published as a versioned artifact the user previews beside the chat.
+  contextBlocks.push(
+    [
+      "Artifacts: when a self-contained deliverable would genuinely help (a chart, a small HTML/JS demo, an SVG, a Mermaid diagram, or a long code sample), you may wrap it in an <artifact> block:",
+      '<artifact identifier="short-slug" type="html|svg|mermaid|markdown|code|react" title="Human title">…content…</artifact>.',
+      "Reuse the same identifier to publish a new version of an earlier artifact.",
+      "Keep each artifact self-contained: no remote scripts, stylesheets, fonts, or network requests; inline anything it needs.",
+      "Do not wrap ordinary prose or short inline code in <artifact> tags.",
+    ].join(" ")
+  );
   if (chat.projectId) {
     const project = getProject(chat.projectId);
     if (project?.instructions) contextBlocks.push(`Project instructions: ${project.instructions}`);
+    const skillInstructions = activeSkillInstructions(chat.projectId);
+    if (skillInstructions) contextBlocks.push(skillInstructions);
   }
   const lastUserText = (() => {
     const lastUser = [...contextRows].reverse().find((row) => row.role === "user");
@@ -288,7 +450,7 @@ export async function POST(request: Request) {
   // Memory has two halves: the model is told how to propose a fact, and the
   // facts already stored are recalled for this question. Incognito chats opt
   // out of both, and the whole feature is off unless it was switched on.
-  if (memoryEnabled() && !chat.incognito) {
+  if (memoryEnabled() && !incognito && mode !== "private") {
     contextBlocks.push(
       [
         "Memory: you can remember durable facts about the user across chats.",
@@ -298,7 +460,7 @@ export async function POST(request: Request) {
     );
   }
 
-  if (memoryEnabled() && !chat.incognito && lastUserText) {
+  if (memoryEnabled() && !incognito && mode !== "private" && lastUserText) {
     const memories = relevantMemories(lastUserText);
     if (memories.length) {
       contextBlocks.push(
@@ -319,7 +481,9 @@ export async function POST(request: Request) {
   // Tools are offered only when the model is not explicitly marked as
   // tool-incapable, and only for tools the user has configured.
   const toolCapable = model.capabilities?.toolCalling !== false;
-  const enabledToolNames = toolCapable ? resolveToolNames(chat.toolsEnabled ?? undefined) : [];
+  let enabledToolNames = toolCapable ? resolveToolNames(chat.toolsEnabled ?? undefined) : [];
+  // Strict Local: keep only tools that never leave the machine (Section 3.3).
+  if (mode === "local") enabledToolNames = enabledToolNames.filter((name) => isLocallyPermittedTool(name));
   const tools = enabledToolNames.length ? toolDefinitions(enabledToolNames) : undefined;
 
   // Create the assistant row up front so a dropped connection still leaves a saved
@@ -352,7 +516,7 @@ export async function POST(request: Request) {
       let usedFallback = false;
       let reasoningStartedAt = 0;
       let reasoningEndedAt = 0;
-      const history = [...historyForModel];
+      let history = [...historyForModel];
 
       const send = (event: OutgoingEvent) => controller.enqueue(encoder.encode(sseEncode(event)));
 
@@ -409,8 +573,23 @@ export async function POST(request: Request) {
         }
       }
 
+      // --- Privacy pipeline: minimize → redact → (gate already applied) ---
+      let redactionEntries: RedactionEntry[] = [];
+      let redactionSummary: RedactionSummary | null = null;
+      if (redactEnabled) {
+        const historyResult = redactMessages(history, redactOptions);
+        history = historyResult.messages as typeof history;
+        redactionEntries = historyResult.entries;
+        const systemResult = redactText(systemPrompt, redactOptions);
+        systemPrompt = systemResult.text;
+        redactionEntries = [...redactionEntries, ...systemResult.entries];
+        redactionSummary = summarizeRedactions(redactionEntries);
+      }
+      const restorer = redactionEntries.length ? new PlaceholderRestorer(redactionEntries) : null;
+
       send({ type: "chat", chatId, title: initialTitle });
       send({ type: "message_ids", assistantMessageId: assistantRow.id });
+      if (redactionSummary) send({ type: "redactions", summary: redactionSummary });
 
       // Deep Research: plan, search, fetch, then let the model write the report
       // from the numbered excerpts. The Stop button cancels every phase.
@@ -442,6 +621,16 @@ export async function POST(request: Request) {
               detail: queries.map((query) => `“${query}”`).join(", "),
             });
 
+            recordEgress({
+              chatId,
+              providerId: provider.id,
+              kind: "search",
+              destination: searchDestination(),
+              label: `Deep Research (${queries.length} quer${queries.length === 1 ? "y" : "ies"})`,
+              mode,
+              payload: queries,
+              status: "ok",
+            });
             const sources = await gatherResearchSources({ queries, signal: ac.signal, onStep: step });
 
             if (sources.length) {
@@ -473,9 +662,8 @@ export async function POST(request: Request) {
         }
       }
 
+      let round = 0;
       try {
-        let round = 0;
-
         while (round < MAX_TOOL_ROUNDS) {
           round += 1;
           const pending = new Map<string, { name: string; input: unknown; args: string }>();
@@ -512,16 +700,20 @@ export async function POST(request: Request) {
           for (const event of roundEvents) {
             if (event.type === "text_delta") {
               if (reasoningStartedAt && !reasoningEndedAt) reasoningEndedAt = Date.now();
-              roundText.push(event.text);
-              textParts.push(event.text);
-              pushText(event.text);
-              send(event);
+              const text = restorer ? restorer.push(event.text) : event.text;
+              if (!text) continue;
+              roundText.push(text);
+              textParts.push(text);
+              pushText(text);
+              send({ type: "text_delta", text });
               continue;
             }
             if (event.type === "reasoning_delta") {
-              reasoningParts.push(event.text);
+              const text = restorer ? restorer.push(event.text) : event.text;
+              if (!text) continue;
+              reasoningParts.push(text);
               if (!reasoningStartedAt) reasoningStartedAt = Date.now();
-              send(event);
+              send({ type: "reasoning_delta", text });
               continue;
             }
             if (event.type === "usage") {
@@ -544,11 +736,21 @@ export async function POST(request: Request) {
             }
             if (event.type === "tool_call_end") {
               const call = pending.get(event.id);
+              // A tool argument may carry a masked value; unmask it for this
+              // approved call so the tool receives what the user meant.
+              let input = event.input;
+              if (redactionEntries.length) {
+                try {
+                  input = JSON.parse(restoreText(JSON.stringify(event.input), redactionEntries));
+                } catch {
+                  input = event.input;
+                }
+              }
               if (call) {
-                call.input = event.input;
+                call.input = input;
                 call.args = "";
               }
-              send(event);
+              send({ type: "tool_call_end", id: event.id, input });
               continue;
             }
             if (event.type === "error") {
@@ -587,6 +789,20 @@ export async function POST(request: Request) {
 
           for (const [id, call] of pending) {
             const spec = toolSpec(call.name);
+            const egress = toolEgress(call.name);
+            if (egress.kind === "thirdParty") {
+              recordEgress({
+                chatId,
+                providerId: provider.id,
+                kind: toolEgressKind(call.name),
+                destination: egress.destination ?? "unknown",
+                label: spec?.label ?? call.name,
+                mode,
+                payload: call.input,
+                redactionCount: redactionEntries.length,
+                status: "ok",
+              });
+            }
             let result: Awaited<ReturnType<typeof runTool>>;
 
             if (spec?.execution === "client") {
@@ -601,6 +817,7 @@ export async function POST(request: Request) {
                 input: call.input,
                 requiresApproval: spec.requiresApproval !== false && !readToolsConfig().code.autoApprove,
                 execution: "client",
+                egress,
               });
 
               const outcome = await waitForClientTool(id, { signal: ac.signal });
@@ -632,6 +849,7 @@ export async function POST(request: Request) {
                 input: call.input,
                 requiresApproval: true,
                 execution: "server",
+                egress,
               });
 
               const decision = await waitForClientTool(id, { signal: ac.signal });
@@ -679,6 +897,16 @@ export async function POST(request: Request) {
           history.push({ role: "tool", content: resultParts });
           if (stopped) break;
         }
+
+        // Release any placeholder the provider left buffered at end of stream.
+        if (restorer) {
+          const tail = restorer.flush();
+          if (tail) {
+            textParts.push(tail);
+            pushText(tail);
+            send({ type: "text_delta", text: tail });
+          }
+        }
       } catch (error) {
         errored = ac.signal.aborted
           ? null
@@ -713,7 +941,7 @@ export async function POST(request: Request) {
 
         // The model can propose facts with <memory>…</memory>; the transcript keeps
         // the plain answer, and the proposal is stored when memory is on.
-        if (memoryEnabled() && !chat?.incognito && textParts.length) {
+        if (memoryEnabled() && !incognito && mode !== "private" && textParts.length) {
           const { proposals } = extractMemoryProposals(textParts.join(""));
           for (const proposal of proposals) {
             if (addMemory(proposal, chatId)) send({ type: "memory", fact: proposal });
@@ -745,6 +973,27 @@ export async function POST(request: Request) {
             /* artifact capture is best-effort */
           }
         }
+
+        recordEgress({
+          chatId,
+          providerId: provider.id,
+          kind: "provider",
+          destination: providerIsLocal
+            ? "local"
+            : (() => {
+                try {
+                  return new URL(provider.baseUrl).hostname;
+                } catch {
+                  return provider.baseUrl;
+                }
+              })(),
+          label: `${provider.name} · ${model.externalId}`,
+          mode,
+          bytesOut: systemPrompt.length + history.reduce((total, message) => total + JSON.stringify(message.content).length, 0),
+          redactionCount: redactionEntries.length,
+          payload: { systemPromptChars: systemPrompt.length, messages: history.length, rounds: round },
+          status: errored ? "error" : ac.signal.aborted ? "blocked" : "ok",
+        });
 
         if (usage.totalTokens || promptTokens || completionTokens) send({ type: "usage", usage });
         send({ type: "done" });

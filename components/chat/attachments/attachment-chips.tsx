@@ -1,7 +1,8 @@
 "use client";
 
-import { FileSpreadsheet, FileText, Image as ImageIcon, Loader2, TriangleAlert, X } from "lucide-react";
+import { CircleAlert, FileSpreadsheet, FileText, Image as ImageIcon, Loader2, TriangleAlert, X } from "lucide-react";
 import { cn, formatBytes } from "@/lib/utils";
+import { formatTokens } from "@/lib/tokens";
 import { useUIStore, type DraftAttachment } from "@/lib/store/ui-store";
 
 function iconFor(attachment: DraftAttachment) {
@@ -30,17 +31,28 @@ export function AttachmentChips() {
               "flex max-w-[15rem] items-center gap-1.5 rounded-lg border px-2 py-1 text-xs",
               failed ? "border-destructive/50 bg-destructive/10 text-destructive" : "border-border bg-secondary/60"
             )}
-            title={attachment.error ?? attachment.name}
+            title={[attachment.name, attachment.note, attachment.error].filter(Boolean).join(" — ")}
           >
             {attachment.status === "uploading" ? (
               <Loader2 className="size-3.5 shrink-0 animate-spin" />
             ) : failed ? (
               <TriangleAlert className="size-3.5 shrink-0" />
+            ) : attachment.note ? (
+              <CircleAlert className="size-3.5 shrink-0 text-accent" />
             ) : (
               <Icon className="size-3.5 shrink-0 text-muted-foreground" />
             )}
             <span className="min-w-0 truncate">{attachment.name}</span>
-            {attachment.truncated ? <span className="shrink-0 text-[10px] uppercase">trimmed</span> : null}
+            {attachment.status === "uploading" ? (
+              <span className="shrink-0 text-[10px] text-muted-foreground">{attachment.progress ?? 0}%</span>
+            ) : null}
+            {attachment.truncated ? (
+              <span className="shrink-0 text-[10px] uppercase text-muted-foreground">trimmed</span>
+            ) : null}
+            {attachment.note ? <span className="shrink-0 text-[10px] uppercase text-accent">note</span> : null}
+            {typeof attachment.tokens === "number" ? (
+              <span className="shrink-0 text-[10px] text-muted-foreground">~{formatTokens(attachment.tokens)} tok</span>
+            ) : null}
             <span className="shrink-0 text-[10px] text-muted-foreground">{formatBytes(attachment.size)}</span>
             <button
               type="button"

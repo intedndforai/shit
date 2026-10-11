@@ -11,6 +11,7 @@ import { ArtifactPanel } from "@/components/artifacts/artifact-panel";
 import { ChatContextBar } from "@/components/chat/context-bar";
 import { ContextMeter } from "@/components/chat/context-meter";
 import { useChatStore } from "@/lib/store/chat-store";
+import { textOf } from "@/lib/store/chat-store";
 
 /** The conversation surface: empty state, transcript, composer, and errors. */
 export function ChatView() {
@@ -23,6 +24,17 @@ export function ChatView() {
   const regenerate = useChatStore((state) => state.regenerate);
   const loadChats = useChatStore((state) => state.loadChats);
   const modelNote = useChatStore((state) => state.modelNote);
+  const lastUserText = React.useMemo(() => {
+    for (let idx = messages.length - 1; idx >= 0; idx--) {
+      const message = messages[idx];
+      if (message.role === "user") {
+        const text = textOf(message);
+        if (text) return text;
+      }
+    }
+    return null;
+  }, [messages]);
+
 
   React.useEffect(() => {
     void loadChats();
@@ -63,7 +75,7 @@ export function ChatView() {
 
       <ChatContextBar />
       <ContextMeter />
-      <Composer onSend={send} onStop={stop} streaming={streaming} />
+      <Composer onSend={send} onStop={stop} streaming={streaming} lastUserText={lastUserText} />
       </div>
       <ArtifactPanel />
     </div>

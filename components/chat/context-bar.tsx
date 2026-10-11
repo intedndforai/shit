@@ -2,10 +2,9 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { EyeOff, FolderKanban, Type } from "lucide-react";
-import { Switch } from "@/components/ui/switch";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { FolderKanban, Type } from "lucide-react";
 import { api, type ProjectDto, type StyleDto } from "@/lib/api-client";
+import { PrivacyModeSelector } from "@/components/privacy/mode-selector";
 import { useChatStore } from "@/lib/store/chat-store";
 
 const SELECT_CLASS =
@@ -13,13 +12,12 @@ const SELECT_CLASS =
 
 /**
  * Per-chat context controls: which project's knowledge base this chat can read,
- * which response style to apply, and whether the chat is incognito.
+ * which response style to apply, and the privacy mode (Section 3.3).
  */
 export function ChatContextBar() {
   const chatId = useChatStore((state) => state.chatId);
   const projectId = useChatStore((state) => state.chatProjectId);
   const styleId = useChatStore((state) => state.chatStyleId);
-  const incognito = useChatStore((state) => state.chatIncognito);
   const updateChatMeta = useChatStore((state) => state.updateChatMeta);
 
   const [projects, setProjects] = React.useState<ProjectDto[]>([]);
@@ -88,22 +86,10 @@ export function ChatContextBar() {
         </select>
       </label>
 
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <label className="ml-auto flex items-center gap-1.5">
-            <EyeOff className="size-3.5" aria-hidden />
-            Incognito
-            <Switch
-              checked={incognito}
-              onCheckedChange={(next) => void updateChatMeta({ incognito: next })}
-              aria-label="Incognito chat"
-            />
-          </label>
-        </TooltipTrigger>
-        <TooltipContent>
-          Incognito chats are never written to the database: no history, no memory, and no titles.
-        </TooltipContent>
-      </Tooltip>
+      <div className="ml-auto flex items-center gap-1.5">
+        <span className="sr-only">Privacy mode</span>
+        <PrivacyModeSelector />
+      </div>
     </div>
   );
 }

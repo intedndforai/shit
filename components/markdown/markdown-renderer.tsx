@@ -10,6 +10,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { ChevronDown } from "lucide-react";
 import { CodeBlock } from "@/components/markdown/code-block";
 import { MermaidDiagram } from "@/components/markdown/mermaid-diagram";
+import { RemoteImage } from "@/components/markdown/remote-image";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -102,6 +103,14 @@ export function MarkdownRenderer({
       },
       td({ children }) {
         return <td className="border-b border-border/60 px-2 py-1.5 align-top">{children}</td>;
+      },
+      img({ src, alt }) {
+        return (
+          <RemoteImage
+            src={typeof src === "string" ? src : undefined}
+            alt={typeof alt === "string" ? alt : undefined}
+          />
+        );
       },
       input({ checked, type }) {
         if (type !== "checkbox") return null;

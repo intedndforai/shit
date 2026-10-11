@@ -60,6 +60,33 @@ export function readSearchApiKey(): string | null {
   }
 }
 
+/** Hostname of the configured search backend (for the egress badge). */
+export function searchDestination(): string {
+  const config = readToolsConfig();
+  const hostOf = (value?: string) => {
+    if (!value) return "";
+    try {
+      return new URL(value).hostname;
+    } catch {
+      return value.replace(/^https?:\/\//i, "").split("/")[0];
+    }
+  };
+  switch (config.webSearch.provider) {
+    case "tavily":
+      return "api.tavily.com";
+    case "brave":
+      return "api.search.brave.com";
+    case "serper":
+      return "google.serper.dev";
+    case "searxng":
+      return hostOf(config.webSearch.baseUrl) || "self-hosted SearXNG";
+    case "custom":
+      return hostOf(config.webSearch.endpoint) || "custom search endpoint";
+    default:
+      return "search backend";
+  }
+}
+
 export interface SearchResult {
   title: string;
   url: string;

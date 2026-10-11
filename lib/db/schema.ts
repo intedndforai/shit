@@ -63,6 +63,21 @@ export const providers = sqliteTable(
       .default({}),
     organizationId: text("organization_id"),
     projectId: text("project_id"),
+    // User-declared data-policy profile (Section 3.4). Never labelled "verified".
+    dataPolicyTraining: text("data_policy_training", {
+      enum: ["unknown", "opt-out-requested", "not-applicable"],
+    })
+      .notNull()
+      .default("unknown"),
+    dataPolicyRetention: text("data_policy_retention", {
+      enum: ["unknown", "standard", "zero-retention-requested", "local"],
+    })
+      .notNull()
+      .default("unknown"),
+    dataPolicyRegion: text("data_policy_region"),
+    dataPolicyUrl: text("data_policy_url"),
+    dataPolicyDeclaredBy: text("data_policy_declared_by"),
+    dataPolicyDeclaredAt: integer("data_policy_declared_at", { mode: "timestamp_ms" }),
     // Model-role flags: which model fulfills each special purpose.
     isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
     isTitleModel: integer("is_title_model", { mode: "boolean" }).notNull().default(false),
@@ -149,6 +164,11 @@ export const chats = sqliteTable(
     pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
     archived: integer("archived", { mode: "boolean" }).notNull().default(false),
     incognito: integer("incognito", { mode: "boolean" }).notNull().default(false),
+    // Privacy mode (Section 3.3): standard | private | incognito | local.
+    // `incognito` above stays in sync for older code paths; prefer this column.
+    privacyMode: text("privacy_mode", { enum: ["standard", "private", "incognito", "local"] })
+      .notNull()
+      .default("standard"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().$defaultFn(now),
     updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().$defaultFn(now),
   },
@@ -169,8 +189,8 @@ export type NewChat = typeof chats.$inferInsert;
  */
 export type ContentPart =
   | { kind: "text"; text: string }
-  | { kind: "image"; dataUrl?: string; url?: string; alt?: string }
-  | { kind: "document"; name: string; mime: string; url?: string; text?: string }
+  | { kind: "image"; dataUrl?: string; url?: string; alt?: string; attachmentId?: string }
+  | { kind: "document"; name: string; mime: string; url?: string; text?: string; attachmentId?: string }
   | {
       kind: "tool_use";
       id: string;
@@ -233,6 +253,8 @@ export const attachments = sqliteTable(
     storagePath: text("storage_path").notNull(),
     text: text("text"),
     truncated: integer("truncated", { mode: "boolean" }).notNull().default(false),
+    /** Partial-extraction or safety note shown next to the attachment. */
+    note: text("note"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().$defaultFn(now),
   },
   (table) => [index("attachments_chat_idx").on(table.chatId), index("attachments_message_idx").on(table.messageId)]
@@ -399,3 +421,117 @@ export const appSettings = sqliteTable("app_settings", {
   value: text("value", { mode: "json" }).$type<unknown>().notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().$defaultFn(now),
 });
+/* ------------------------------------------------------------------ */
+/* Skills (M9): versioned, provenance-aware, project-scoped            */
+/* ------------------------------------------------------------------ */
+
+export const skillSources = ["builtin", "user", "imported", "verified"] as const;
+export type SkillSource = (typeof skillSources)[number];
+
+export const skillTrust = ["trusted", "untrusted", "reviewed"] as const;
+export type SkillTrust = (typeof skillTrust)[number];
+
+/**
+ * One row per published version: editing inserts a new row with the same
+ * skillKey and a bumped version, so older versions stay as history. The
+ * latest row per skillKey is the active skill.
+ */
+export const skills = sqliteTable(
+  "skills",
+  {
+    id: text("id").primaryKey().$defaultFn(uuid),
+    skillKey: text("skill_key").notNull(), // stable slug shared by all versions
+    version: integer("version").notNull().default(1),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    taskTypes: text("task_types", { mode: "json" }).$type<string[]>().notNull().default([]),
+    instructions: text("instructions").notNull().default(""),
+    requiredTools: text("required_tools", { mode: "json" }).$type<string[]>().notNull().default([]),
+    source: text("source", { enum: [...skillSources] }).notNull().default("user"),
+    // Provenance for fetched/imported skills: URL, retrieval date, content hash.
+    provenance: text("provenance", { mode: "json" })
+      .$type<{ url?: string | null; retrievedAt?: number | null; contentHash?: string | null }>()
+      .notNull()
+      .default({}),
+    trustStatus: text("trust_status", { enum: [...skillTrust] }).notNull().default("untrusted"),
+    integrityHash: text("integrity_hash").notNull().default(""),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().$defaultFn(now),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().$defaultFn(now),
+  },
+  (table) => [
+    index("skills_key_idx").on(table.skillKey),
+    index("skills_enabled_idx").on(table.enabled),
+  ]
+);
+
+export type Skill = typeof skills.$inferSelect;
+
+/** Which skills a project has assigned (global and project-local skills). */
+export const projectSkills = sqliteTable(
+  "project_skills",
+  {
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    skillId: text("skill_id")
+      .notNull()
+      .references(() => skills.id, { onDelete: "cascade" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().$defaultFn(now),
+  },
+  (table) => [
+    index("project_skills_project_idx").on(table.projectId),
+    index("project_skills_skill_idx").on(table.skillId),
+  ]
+);
+
+/* ------------------------------------------------------------------ */
+/* Egress log (privacy layer): metadata only, never content            */
+/* ------------------------------------------------------------------ */
+
+export const egressKinds = [
+  "provider",
+  "search",
+  "fetch",
+  "tool",
+  "mcp",
+  "custom",
+  "embeddings",
+  "title",
+  "summary",
+  "speech",
+  "other",
+] as const;
+export type EgressKind = (typeof egressKinds)[number];
+
+/**
+ * One row per outbound request that leaves the app process. Stores counts,
+ * a destination host, and a hash of the payload — never the payload itself,
+ * never a prompt, query, file name, or header value (Section 3.2).
+ */
+export const egressEvents = sqliteTable(
+  "egress_events",
+  {
+    id: text("id").primaryKey().$defaultFn(uuid),
+    chatId: text("chat_id").references(() => chats.id, { onDelete: "cascade" }),
+    providerId: text("provider_id").references(() => providers.id, { onDelete: "set null" }),
+    kind: text("kind", { enum: [...egressKinds] }).notNull(),
+    /** Hostname, tool+host, or "local". Never a full URL with a query string. */
+    destination: text("destination").notNull(),
+    /** Short label: tool name, model id, or "web search (brave)". */
+    label: text("label"),
+    mode: text("mode").notNull().default("standard"),
+    bytesOut: integer("bytes_out").notNull().default(0),
+    redactionCount: integer("redaction_count").notNull().default(0),
+    /** SHA-256 of the outgoing payload, for auditing without storing content. */
+    payloadHash: text("payload_hash"),
+    status: text("status").notNull().default("ok"), // ok | blocked | error
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().$defaultFn(now),
+  },
+  (table) => [
+    index("egress_chat_idx").on(table.chatId),
+    index("egress_created_idx").on(table.createdAt),
+  ]
+);
+
+export type EgressEvent = typeof egressEvents.$inferSelect;

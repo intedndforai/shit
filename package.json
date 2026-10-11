@@ -18,7 +18,10 @@
     "db:push": "drizzle-kit push",
     "mock:provider": "node scripts/mock-provider.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "files:check": "node scripts/files-check.mjs"
+    "files:check": "node scripts/files-check.mjs",
+    "artifacts:check": "node scripts/artifacts-check.mjs",
+    "privacy:check": "node scripts/privacy-check.mjs",
+    "redact:check": "tsx scripts/redact-check.ts"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.2.7",
@@ -40,6 +43,7 @@
     "drizzle-orm": "^0.45.4",
     "framer-motion": "^14.1.0",
     "highlight.js": "^11.12.0",
+    "jszip": "^3.10.1",
     "katex": "^0.19.0",
     "lucide-react": "^1.52.0",
     "mammoth": "^1.13.0",

@@ -2,6 +2,7 @@ import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { models, providerFormats, providers, type Provider } from "@/lib/db/schema";
+import { providerRetentionPolicies, providerTrainingPolicies } from "@/lib/privacy/types";
 import { decryptText, encryptText, maskSecret } from "@/lib/crypto";
 import { getAdapter, type ModelInfo, type ProviderConnection, type ProviderFormat } from "@/lib/providers";
 
@@ -19,6 +20,11 @@ export const providerInputSchema = z.object({
   customHeaders: z.record(z.string(), z.string()).optional(),
   organizationId: z.string().trim().max(200).optional().nullable(),
   projectId: z.string().trim().max(200).optional().nullable(),
+  // User-declared data-policy profile (Section 3.4). Never labelled "verified".
+  dataPolicyTraining: z.enum(providerTrainingPolicies).optional(),
+  dataPolicyRetention: z.enum(providerRetentionPolicies).optional(),
+  dataPolicyRegion: z.string().trim().max(120).optional().nullable(),
+  dataPolicyUrl: z.string().trim().max(500).optional().nullable(),
 });
 
 export type ProviderInput = z.infer<typeof providerInputSchema>;
@@ -31,6 +37,12 @@ export interface PublicProvider {
   customHeaders: Record<string, string>;
   organizationId: string | null;
   projectId: string | null;
+  dataPolicyTraining: string;
+  dataPolicyRetention: string;
+  dataPolicyRegion: string | null;
+  dataPolicyUrl: string | null;
+  dataPolicyDeclaredBy: string | null;
+  dataPolicyDeclaredAt: number | null;
   hasApiKey: boolean;
   maskedApiKey: string;
   isDefault: boolean;
@@ -59,6 +71,12 @@ function toPublic(provider: Provider, modelCount: number): PublicProvider {
     customHeaders: provider.customHeaders ?? {},
     organizationId: provider.organizationId,
     projectId: provider.projectId,
+    dataPolicyTraining: provider.dataPolicyTraining,
+    dataPolicyRetention: provider.dataPolicyRetention,
+    dataPolicyRegion: provider.dataPolicyRegion,
+    dataPolicyUrl: provider.dataPolicyUrl,
+    dataPolicyDeclaredBy: provider.dataPolicyDeclaredBy,
+    dataPolicyDeclaredAt: provider.dataPolicyDeclaredAt?.getTime() ?? null,
     hasApiKey: Boolean(provider.apiKeyEncrypted),
     maskedApiKey: masked,
     isDefault: provider.isDefault,
@@ -103,6 +121,13 @@ export function createProvider(input: ProviderInput): PublicProvider {
       customHeaders: input.customHeaders ?? {},
       organizationId: input.organizationId ?? null,
       projectId: input.projectId ?? null,
+      dataPolicyTraining: input.dataPolicyTraining ?? "unknown",
+      dataPolicyRetention: input.dataPolicyRetention ?? "unknown",
+      dataPolicyRegion: input.dataPolicyRegion ?? null,
+      dataPolicyUrl: input.dataPolicyUrl ?? null,
+      // A declaration is always authored by the person running this instance.
+      dataPolicyDeclaredBy: input.dataPolicyTraining || input.dataPolicyRetention ? "user" : null,
+      dataPolicyDeclaredAt: input.dataPolicyTraining || input.dataPolicyRetention ? new Date() : null,
       isDefault: Boolean(isFirst),
     })
     .returning()
@@ -123,6 +148,14 @@ export function updateProvider(id: string, input: Partial<ProviderInput> & { isD
   if (input.customHeaders !== undefined) patch.customHeaders = input.customHeaders;
   if (input.organizationId !== undefined) patch.organizationId = input.organizationId;
   if (input.projectId !== undefined) patch.projectId = input.projectId;
+  if (input.dataPolicyTraining !== undefined) patch.dataPolicyTraining = input.dataPolicyTraining;
+  if (input.dataPolicyRetention !== undefined) patch.dataPolicyRetention = input.dataPolicyRetention;
+  if (input.dataPolicyRegion !== undefined) patch.dataPolicyRegion = input.dataPolicyRegion;
+  if (input.dataPolicyUrl !== undefined) patch.dataPolicyUrl = input.dataPolicyUrl;
+  if (input.dataPolicyTraining !== undefined || input.dataPolicyRetention !== undefined) {
+    patch.dataPolicyDeclaredBy = "user";
+    patch.dataPolicyDeclaredAt = new Date();
+  }
 
   // An empty string clears the stored key; undefined leaves it untouched.
   if (input.apiKey !== undefined) {

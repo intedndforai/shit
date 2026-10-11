@@ -11,6 +11,7 @@ import { parseArtifacts, stripArtifacts } from "@/lib/artifacts";
 import { splitMemoryTags } from "@/lib/memory-tags";
 import { SourceList } from "@/components/chat/sources-list";
 import { ResearchTimeline } from "@/components/chat/research-timeline";
+import { ImageLightbox } from "@/components/chat/image-lightbox";
 import { useUIStore } from "@/lib/store/ui-store";
 import { VersionSwitcher } from "@/components/chat/version-switcher";
 import { CitationList, ToolCallList } from "@/components/chat/tool-call";
@@ -19,8 +20,11 @@ import { useChatStore, textOf, thinkingOf, type UiMessage } from "@/lib/store/ch
 /** One conversation turn: user bubble or rendered assistant answer. */
 /** Image thumbnails and document chips attached to a user turn. */
 function AttachmentPreview({ message }: { message: UiMessage }) {
+  const [openImage, setOpenImage] = React.useState<number | null>(null);
   const images = message.content.filter((part) => part.kind === "image");
   const documents = message.content.filter((part) => part.kind === "document");
+  const openImagePart = openImage !== null ? images[openImage] : null;
+  const openSrc = openImagePart?.kind === "image" ? openImagePart.dataUrl ?? openImagePart.url ?? null : null;
 
   if (!images.length && !documents.length) return null;
 
@@ -30,12 +34,12 @@ function AttachmentPreview({ message }: { message: UiMessage }) {
         <div className="flex flex-wrap justify-end gap-1.5">
           {images.map((part, index) =>
             part.kind === "image" && (part.dataUrl || part.url) ? (
-              <a
+              <button
+                type="button"
                 key={`image-${index}`}
-                href={part.url ?? part.dataUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="block"
+                onClick={() => setOpenImage(index)}
+                aria-label={"Open " + (part.alt ?? "attached image")}
+                className="block cursor-zoom-in"
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
@@ -43,10 +47,21 @@ function AttachmentPreview({ message }: { message: UiMessage }) {
                   alt={part.alt ?? "Attached image"}
                   className="max-h-56 rounded-xl border border-border"
                 />
-              </a>
+              </button>
             ) : null
           )}
         </div>
+      ) : null}
+
+      {openSrc ? (
+        <ImageLightbox
+          src={openSrc}
+          alt={openImagePart?.kind === "image" ? openImagePart.alt ?? "Attached image" : "Attached image"}
+          open
+          onOpenChange={(value) => {
+            if (!value) setOpenImage(null);
+          }}
+        />
       ) : null}
 
       {documents.length ? (

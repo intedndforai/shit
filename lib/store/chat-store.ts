@@ -3,7 +3,35 @@
 import { create } from "zustand";
 import type { ContentPart } from "@/lib/db/schema";
 import { useUIStore } from "@/lib/store/ui-store";
-import { api, type ChatMessageDto, type ChatSummary } from "@/lib/api-client";
+import {
+  api,
+  type ChatMessageDto,
+  type ChatSummary,
+  type PolicyGateDto,
+  type RedactionSummaryDto,
+  type RedactionSummaryItemDto,
+} from "@/lib/api-client";
+import type { PrivacyMode } from "@/lib/privacy/types";
+
+/** Everything needed to re-send a blocked turn with a one-time override. */
+interface PrivacyRetry {
+  message?: string | ContentPart[];
+  regenerate?: boolean;
+  continueFromLeaf?: boolean;
+  toolsEnabled?: string[] | null;
+  modelId?: string | null;
+  research?: boolean;
+  history?: Array<{ role: "system" | "user" | "assistant" | "tool"; content: ContentPart[] }>;
+}
+
+/** A blocked send that the user can override once (Sections 3.4, 3.6). */
+export interface PrivacyBlock {
+  code: "credentials" | "policy-gate" | "strict-local";
+  message: string;
+  credentials?: RedactionSummaryItemDto[];
+  gate?: PolicyGateDto;
+  retry?: PrivacyRetry;
+}
 
 export interface UiMessage {
   id: string;
@@ -29,6 +57,8 @@ export interface UiMessage {
   researchSteps?: Array<{ id: string; label: string; status: string; detail?: string }>;
   /** Sources Deep Research gathered before the answer was written. */
   researchSources?: Array<{ title: string; url: string; snippet: string }>;
+  /** Values masked before this answer was requested (Private / Strict Local). */
+  redactions?: RedactionSummaryDto;
 }
 
 interface ChatState {
@@ -37,6 +67,10 @@ interface ChatState {
   chatTitle: string | null;
   chatTitleSource: "auto" | "model" | "user";
   chatModelLabel: string | null;
+  /** Id of the model the open chat is pinned to (null for a brand-new chat). */
+  chatModelId: string | null;
+  /** Provider behind the open chat's model, for the destination badge. */
+  chatProviderId: string | null;
   chatArchived: boolean;
   /** Model window and pricing, for the context meter and cost estimates. */
   chatContextWindow: number;
@@ -50,6 +84,7 @@ interface ChatState {
   chatThinkingBudget: number | null;
   chatSystemPrompt: string | null;
   chatIncognito: boolean;
+  chatPrivacyMode: PrivacyMode;
   chatStyleId: string | null;
   chatProjectId: string | null;
   /** Set when a retry had to fall back to another model. */
@@ -59,6 +94,11 @@ interface ChatState {
   error: string | null;
   loading: boolean;
   editingId: string | null;
+  /** Set when the privacy gate or credential guard stopped a send. */
+  privacyBlock: PrivacyBlock | null;
+  /** Clears the block and re-sends with an explicit one-time override. */
+  retryPrivacyOverride: (add: { allowCredentials?: boolean; allowPolicyOnce?: boolean }) => Promise<void>;
+  clearPrivacyBlock: () => void;
 
   loadChats: () => Promise<void>;
   openChat: (id: string | null) => Promise<void>;
@@ -85,9 +125,14 @@ interface ChatState {
     styleId?: string | null;
     projectId?: string | null;
     incognito?: boolean;
+    privacyMode?: PrivacyMode;
     modelId?: string | null;
   }) => Promise<void>;
-  newChat: (options?: { projectId?: string | null; incognito?: boolean }) => Promise<string | null>;
+  newChat: (options?: {
+    projectId?: string | null;
+    incognito?: boolean;
+    privacyMode?: PrivacyMode;
+  }) => Promise<string | null>;
 }
 
 let activeController: AbortController | null = null;
@@ -114,6 +159,8 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   chatTitle: null,
   chatTitleSource: "auto",
   chatModelLabel: null,
+  chatModelId: null,
+  chatProviderId: null,
   chatArchived: false,
   chatContextWindow: 128000,
   chatPricing: { input: 0, output: 0 },
@@ -125,6 +172,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   chatThinkingBudget: null,
   chatSystemPrompt: null,
   chatIncognito: false,
+  chatPrivacyMode: "standard",
   chatStyleId: null,
   chatProjectId: null,
   modelNote: null,
@@ -133,6 +181,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   error: null,
   loading: false,
   editingId: null,
+  privacyBlock: null,
 
   async loadChats() {
     try {
@@ -150,8 +199,11 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         chatTitle: null,
         chatTitleSource: "auto",
         chatModelLabel: null,
+        chatModelId: null,
+        chatProviderId: null,
         chatArchived: false,
         chatIncognito: false,
+        chatPrivacyMode: "standard",
         chatStyleId: null,
         chatProjectId: null,
         modelNote: null,
@@ -169,6 +221,8 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         chatTitle: data.chat.title,
         chatTitleSource: data.chat.titleSource,
         chatModelLabel: data.model ? data.model.displayName ?? data.model.externalId : null,
+        chatModelId: data.chat.modelId ?? null,
+        chatProviderId: data.chat.providerId ?? null,
         chatArchived: data.chat.archived,
         chatContextWindow: data.model?.contextWindow ?? 128000,
         chatPricing: {
@@ -182,7 +236,8 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         chatMaxTokens: data.chat.maxTokens,
         chatThinkingBudget: data.chat.thinkingBudget,
         chatSystemPrompt: data.chat.systemPrompt,
-        chatIncognito: data.chat.incognito,
+        chatIncognito: data.chat.incognito || data.chat.privacyMode === "incognito",
+        chatPrivacyMode: (data.chat.privacyMode ?? "standard") as PrivacyMode,
         chatStyleId: data.chat.styleId,
         chatProjectId: data.chat.projectId,
         messages: data.messages.map(toUiMessage),
@@ -216,9 +271,22 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     if (trimmed) parts.push({ kind: "text", text: trimmed });
     for (const draft of drafts) {
       if (draft.kind === "image" && draft.dataUrl) {
-        parts.push({ kind: "image", dataUrl: draft.dataUrl, alt: draft.name });
+        parts.push({
+          kind: "image",
+          dataUrl: draft.dataUrl,
+          alt: draft.name,
+          attachmentId: draft.serverId,
+          url: draft.url,
+        });
       } else if (draft.text) {
-        parts.push({ kind: "document", name: draft.name, mime: draft.mime, text: draft.text });
+        parts.push({
+          kind: "document",
+          name: draft.name,
+          mime: draft.mime,
+          text: draft.text,
+          attachmentId: draft.serverId,
+          url: draft.url,
+        });
       }
     }
 
@@ -250,6 +318,17 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   async regenerate() {
     if (get().streaming) return;
     await runStream(set, get, { regenerate: true });
+  },
+
+  clearPrivacyBlock() {
+    set({ privacyBlock: null });
+  },
+
+  async retryPrivacyOverride(add) {
+    const block = get().privacyBlock;
+    if (!block) return;
+    set({ privacyBlock: null });
+    await runStream(set, get, { ...(block.retry ?? {}), ...add });
   },
 
   async editMessage(id, text) {
@@ -328,9 +407,13 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   async updateChatMeta(patch) {
     const id = get().chatId;
     set({
+      ...(patch.modelId !== undefined ? { chatModelId: patch.modelId } : {}),
       ...(patch.styleId !== undefined ? { chatStyleId: patch.styleId } : {}),
       ...(patch.projectId !== undefined ? { chatProjectId: patch.projectId } : {}),
       ...(patch.incognito !== undefined ? { chatIncognito: patch.incognito } : {}),
+      ...(patch.privacyMode !== undefined
+        ? { chatPrivacyMode: patch.privacyMode, chatIncognito: patch.privacyMode === "incognito" }
+        : {}),
     });
     if (!id) return;
     try {
@@ -344,7 +427,8 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     try {
       const { chat } = await api.createChat({
         projectId: options.projectId ?? null,
-        incognito: options.incognito ?? false,
+        incognito: options.incognito ?? options.privacyMode === "incognito",
+        privacyMode: options.privacyMode,
       });
       await get().loadChats();
       await get().openChat(chat.id);
@@ -402,6 +486,8 @@ async function runStream(
     modelId?: string | null;
     research?: boolean;
     history?: Array<{ role: "system" | "user" | "assistant" | "tool"; content: ContentPart[] }>;
+    allowCredentials?: boolean;
+    allowPolicyOnce?: boolean;
   }
 ): Promise<void> {
   const state = get();
@@ -449,6 +535,8 @@ async function runStream(
         modelId: payload.modelId ?? undefined,
         research: payload.research,
         history: payload.history,
+        allowCredentials: payload.allowCredentials,
+        allowPolicyOnce: payload.allowPolicyOnce,
       }),
       signal: controller.signal,
     });
@@ -456,10 +544,34 @@ async function runStream(
     if (!response.ok || !response.body) {
       const detail = await response.text();
       let message = `Request failed (${response.status}).`;
+      let body: Record<string, unknown> = {};
       try {
-        message = (JSON.parse(detail) as { error?: string }).error ?? message;
+        body = JSON.parse(detail) as Record<string, unknown>;
+        message = (body.error as string) ?? message;
       } catch {
         /* keep the default message */
+      }
+      const code = typeof body.code === "string" ? body.code : null;
+      if (code === "credentials" || code === "policy-gate" || code === "strict-local") {
+        set({
+          privacyBlock: {
+            code,
+            message,
+            credentials: Array.isArray(body.credentials)
+              ? (body.credentials as RedactionSummaryItemDto[])
+              : undefined,
+            gate: (body.gate as PolicyGateDto | undefined) ?? undefined,
+            retry: {
+              message: payload.message,
+              regenerate: payload.regenerate,
+              continueFromLeaf: payload.continueFromLeaf,
+              history: payload.history,
+              toolsEnabled: payload.toolsEnabled,
+              modelId: payload.modelId,
+              research: payload.research,
+            },
+          },
+        });
       }
       throw new Error(message);
     }
@@ -503,6 +615,8 @@ async function runStream(
         chatTitle: data.chat.title,
         chatTitleSource: data.chat.titleSource,
         chatModelLabel: data.model ? data.model.displayName ?? data.model.externalId : null,
+        chatModelId: data.chat.modelId ?? null,
+        chatProviderId: data.chat.providerId ?? null,
         chatArchived: data.chat.archived,
       });
     }
@@ -594,6 +708,12 @@ function handleEvent(event: Record<string, unknown>, streamingId: string, set: S
       }
       return { ...message, content: parts };
     });
+    return;
+  }
+
+  if (type === "redactions") {
+    const summary = event.summary as RedactionSummaryDto | undefined;
+    if (summary) update((message) => ({ ...message, redactions: summary }));
     return;
   }
 
@@ -697,6 +817,7 @@ function handleEvent(event: Record<string, unknown>, streamingId: string, set: S
       label: (event.label as string) ?? name,
       input,
       requiresApproval: Boolean(event.requiresApproval),
+      egress: event.egress as { kind: string; destination?: string; note?: string } | undefined,
       execution: (event.execution as "server" | "client") ?? "client",
       status: "approval",
       stdout: "",
@@ -759,6 +880,7 @@ function carryLocalAnnotations(next: UiMessage[], local: UiMessage[]): UiMessage
       ...(source.sources?.length ? { sources: source.sources, sourceMode: source.sourceMode } : {}),
       ...(source.citations?.length ? { citations: source.citations } : {}),
       ...(source.memoryNotes?.length ? { memoryNotes: source.memoryNotes } : {}),
+      ...(source.redactions ? { redactions: source.redactions } : {}),
       ...(source.researchSteps?.length ? { researchSteps: source.researchSteps } : {}),
       ...(source.researchSources?.length ? { researchSources: source.researchSources } : {}),
     };

@@ -4,6 +4,7 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { Topbar } from "@/components/layout/topbar";
 import { SearchDialog } from "@/components/search/search-dialog";
+import { ShortcutsDialog } from "@/components/layout/shortcut-dialog";
 
 /** Persistent application frame: sidebar rail, top bar, search, and page content. */
 export function AppFrame({ children }: { children: React.ReactNode }) {
@@ -16,6 +17,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
         <main className="min-h-0 flex-1 overflow-hidden">{children}</main>
       </div>
       <SearchDialog />
+      <ShortcutsDialog />
     </div>
   );
 }

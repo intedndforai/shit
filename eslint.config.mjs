@@ -7,12 +7,17 @@ const eslintConfig = defineConfig([
   ...nextTs,
   globalIgnores([
     ".next/**",
+    // The isolated dev build dir (`NEXT_DIST_DIR=.next-build`) is generated output too.
+    ".next-build/**",
     "out/**",
     "build/**",
     "node_modules/**",
     "coverage/**",
     "drizzle/**",
     "next-env.d.ts",
+    // Scratch/working files that are not part of the app.
+    ".tmp/**",
+    ".tmp-*",
   ]),
   {
     rules: {

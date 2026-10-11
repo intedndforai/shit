@@ -17,6 +17,14 @@ export interface DraftAttachment {
   dataUrl?: string;
   url?: string;
   truncated?: boolean;
+  /** Partial-extraction or safety note reported by the server. */
+  note?: string;
+  /** Server-assigned attachment id, once the upload succeeds. */
+  serverId?: string;
+  /** Upload completion 0-100 while the file is in flight. */
+  progress?: number;
+  /** Rough token count for the extracted content, for the chip label. */
+  tokens?: number;
   status: "uploading" | "ready" | "error";
   error?: string;
 }
@@ -36,6 +44,8 @@ export interface ToolRunState {
   label: string;
   input: unknown;
   requiresApproval: boolean;
+  /** Where the tool sends data, shown in the approval prompt (Section 3.10). */
+  egress?: { kind: string; destination?: string; note?: string };
   /** "server" tools only need a decision; "client" tools run in the browser. */
   execution: "server" | "client";
   status: "approval" | "running" | "done" | "error" | "denied";
@@ -57,6 +67,7 @@ interface UIState {
   accent: Accent;
   /* Overlays */
   searchOpen: boolean;
+  shortcutsOpen: boolean;
   artifactsOpen: boolean;
   /* Composer */
   composerDraft: string;
@@ -74,6 +85,7 @@ interface UIState {
   setSidebarCollapsed: (collapsed: boolean) => void;
   setMobileNavOpen: (open: boolean) => void;
   setAccent: (accent: Accent) => void;
+  setShortcutsOpen: (open: boolean) => void;
   setSearchOpen: (open: boolean) => void;
   setArtifactsOpen: (open: boolean) => void;
   toggleArtifacts: () => void;
@@ -96,6 +108,7 @@ export const useUIStore = create<UIState>()(
     (set) => ({
       sidebarCollapsed: false,
       mobileNavOpen: false,
+  shortcutsOpen: false,
       accent: "amber",
       searchOpen: false,
       artifactsOpen: false,
@@ -107,6 +120,7 @@ export const useUIStore = create<UIState>()(
       researchMode: false,
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
+  setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
       setMobileNavOpen: (mobileNavOpen) => set({ mobileNavOpen }),
       setAccent: (accent) => set({ accent }),
       setSearchOpen: (searchOpen) => set({ searchOpen }),

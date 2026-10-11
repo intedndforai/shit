@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import { MAX_EXTRACTED_CHARS, MAX_IMAGE_BYTES } from "./storage";
+import { MAX_EXTRACTED_CHARS, MAX_IMAGE_BYTES, MAX_ZIP_ENTRIES, MAX_ZIP_ENTRY_BYTES, MAX_ZIP_TOTAL_BYTES , formatBytes } from "./storage";
 
 /**
  * Server-side attachment extraction.
@@ -20,6 +20,7 @@ export interface ExtractedFile {
   kind: AttachmentKind;
   text?: string;
   dataUrl?: string;
+  note?: string;
   truncated: boolean;
 }
 
@@ -73,6 +74,22 @@ export function mimeFromName(name: string): string {
   if (TEXT_EXTENSIONS.includes(extension)) return "text/plain";
   return "application/octet-stream";
 }
+
+/**
+ * Magic-byte signatures. Extension and MIME claims are checked against the
+ * actual bytes so a renamed file is caught instead of producing a confusing
+ * parse error.
+ */
+function detectedSignatureKind(bytes: Buffer): "pdf" | "zip" | "png" | "jpeg" | "gif" | "webp" | null {
+  if (bytes.length >= 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) return "pdf";
+  if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && (bytes[2] === 0x03 || bytes[2] === 0x05 || bytes[2] === 0x07)) return "zip";
+  if (bytes.length >= 4 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpeg";
+  if (bytes.length >= 4 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return "gif";
+  if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return "webp";
+  return null;
+}
+
 
 function clamp(text: string): { text: string; truncated: boolean } {
   const trimmed = text.replace(/\u0000/g, "").replace(/\r\n/g, "\n").trim();
@@ -160,7 +177,31 @@ async function extractPdf(bytes: Buffer): Promise<ExtractedFile> {
 
   const body = pages.join("\n\n");
   const { text, truncated } = clamp(body);
-  return { kind: "pdf", text, truncated: truncated || document.numPages > maxPages };
+  const clipped = truncated || document.numPages > maxPages;
+  const emptyPages = pages.filter((page) => !page.trim()).length;
+
+  if (!text) {
+    return {
+      kind: "pdf",
+      text: "",
+      truncated: false,
+      note: "This PDF has no selectable text — likely scanned or image-only pages. OCR is not bundled, so upload a text-based PDF or DOCX instead.",
+    };
+  }
+
+  const notes: string[] = [];
+  if (emptyPages) {
+    notes.push(
+      emptyPages + " of " + maxPages + " page" + (maxPages === 1 ? "" : "s") + " had no selectable text (scanned or image-only)."
+    );
+  }
+  if (document.numPages > maxPages) {
+    notes.push("Only the first " + maxPages + " of " + document.numPages + " pages were read.");
+  } else if (truncated) {
+    notes.push("The extracted text was trimmed to fit the character limit.");
+  }
+
+  return { kind: "pdf", text, truncated: clipped, ...(notes.length ? { note: notes.join(" ") } : {}) };
 }
 
 interface MammothModule {
@@ -205,9 +246,152 @@ async function extractSpreadsheet(bytes: Buffer): Promise<ExtractedFile> {
   return { kind: "spreadsheet", text, truncated: truncated || clipped };
 }
 
+interface ZipEntry {
+  name: string;
+  dir: boolean;
+  async(type: "string"): Promise<string>;
+  async(type: "nodebuffer"): Promise<Buffer>;
+}
+interface ZipArchive { files: Record<string, ZipEntry>; }
+
+/**
+ * ZIP extraction with archive safety: capped entry count, per-file and total
+ * uncompressed size limits, and rejection of traversal paths ("..", absolute
+ * paths, drive letters). Entries are read as text when possible; PDFs, DOCX,
+ * XLSX, and CSV inside the archive go through the normal extractors. Images
+ * and unknown files are skipped and reported, not silently dropped.
+ */
+async function extractZip(bytes: Buffer): Promise<ExtractedFile> {
+  const JSZip = nodeRequire("jszip") as { loadAsync: (data: Buffer) => Promise<ZipArchive> };
+  let zip: ZipArchive;
+  try {
+    zip = await JSZip.loadAsync(bytes);
+  } catch {
+    throw new UnsupportedFileError("That ZIP archive could not be read.");
+  }
+  const entries = Object.values(zip.files);
+  if (!entries.length) throw new UnsupportedFileError("That archive is empty.");
+  if (entries.length > MAX_ZIP_ENTRIES) {
+    throw new UnsupportedFileError("That archive has " + entries.length + " entries; Conduit accepts up to " + MAX_ZIP_ENTRIES + ".");
+  }
+
+  const safeName = (raw: string): string => raw.replace(/\\/g, "/").replace(/^\.\//, "");
+  let total = 0;
+  for (const entry of entries) {
+    if (entry.dir) continue;
+    const norm = safeName(entry.name);
+    if (norm.startsWith("/") || /^[a-zA-Z]:\//.test(norm) || norm.split("/").includes("..")) {
+      throw new UnsupportedFileError("That archive contains an unsafe path (\"" + entry.name + "\") and was rejected.");
+    }
+    const declared = (entry as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize ?? 0;
+    if (declared > MAX_ZIP_ENTRY_BYTES) {
+      throw new UnsupportedFileError("One file inside the archive is larger than the " + formatBytes(MAX_ZIP_ENTRY_BYTES) + " per-file limit.");
+    }
+    total += declared;
+    if (total > MAX_ZIP_TOTAL_BYTES) {
+      throw new UnsupportedFileError("Extracted archive content is larger than " + formatBytes(MAX_ZIP_TOTAL_BYTES) + ".");
+    }
+  }
+
+  const parts: string[] = [];
+  const skippedNames: string[] = [];
+  let truncated = false;
+  /** Re-checked against the real inflated bytes, in case a header lies. */
+  let actualTotal = 0;
+
+  for (const entry of entries) {
+    if (entry.dir) continue;
+    const norm = safeName(entry.name);
+    const ext = extensionOf(entry.name);
+    if ([ ".png", ".jpg", ".jpeg", ".gif", ".webp" ].includes(ext)) {
+      skippedNames.push(entry.name);
+      continue;
+    }
+
+    const binaryEntry = [".pdf", ".docx", ".xlsx", ".xls", ".csv", ".tsv", ".doc"].includes(ext);
+    if (!binaryEntry && !isTextLike(mimeFromName(entry.name), entry.name)) {
+      skippedNames.push(entry.name);
+      continue;
+    }
+
+    let raw: Buffer;
+    try {
+      raw = await entry.async("nodebuffer");
+    } catch {
+      skippedNames.push(entry.name);
+      continue;
+    }
+
+    // Decompression-bomb guard: the central directory can understate a size,
+    // so the inflated length is checked too, and a breach rejects the archive.
+    if (raw.byteLength > MAX_ZIP_ENTRY_BYTES) {
+      throw new UnsupportedFileError(
+        "One file inside the archive expanded past the " + formatBytes(MAX_ZIP_ENTRY_BYTES) + " per-file limit."
+      );
+    }
+    actualTotal += raw.byteLength;
+    if (actualTotal > MAX_ZIP_TOTAL_BYTES) {
+      throw new UnsupportedFileError("Extracted archive content is larger than " + formatBytes(MAX_ZIP_TOTAL_BYTES) + ".");
+    }
+
+    let textNode: string | null = null;
+    let entryTruncated = false;
+    if (binaryEntry) {
+      try {
+        const extracted = await extractFile({ name: entry.name, mime: mimeFromName(entry.name), bytes: raw });
+        textNode = extracted.text ?? null;
+        entryTruncated = extracted.truncated;
+      } catch (error) {
+        if (error instanceof UnsupportedFileError) {
+          skippedNames.push(entry.name);
+          continue;
+        }
+        throw error;
+      }
+    } else {
+      const clamped = clamp(raw.toString("utf8").slice(0, 100_000));
+      textNode = clamped.text;
+      entryTruncated = clamped.truncated;
+    }
+
+    if (textNode?.trim()) parts.push("# " + norm + "\n" + textNode.trim());
+    if (entryTruncated) truncated = true;
+  }
+
+  if (!parts.length) {
+    throw new UnsupportedFileError("That archive contains no files Conduit can read (text, code, CSV, PDF, DOCX, or XLSX).");
+  }
+  const { text, truncated: clipped } = clamp(parts.join("\n\n"));
+  const note = skippedNames.length
+    ? parts.length + " file" + (parts.length === 1 ? "" : "s") + " extracted; " + skippedNames.length + " skipped (" + skippedNames.slice(0, 3).join(", ") + (skippedNames.length > 3 ? ", …" : "") + ")"
+    : undefined;
+  return { kind: "other", text, truncated: truncated || clipped, note };
+}
+
 export async function extractFile(input: { name: string; mime: string; bytes: Buffer }): Promise<ExtractedFile> {
   const mime = input.mime.toLowerCase();
   const name = input.name;
+  const ext = extensionOf(name);
+  const signature = detectedSignatureKind(input.bytes);
+
+  /* Signature consistency: a renamed file is rejected instead of misparsed. */
+  const expectedSignature: Record<string, string> = {
+    "application/pdf": "pdf",
+    "image/png": "png",
+    "image/jpeg": "jpeg",
+    "image/jpg": "jpeg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+  };
+  if (expectedSignature[mime]) {
+    const wanted = expectedSignature[mime] as string;
+    if (signature !== wanted && signature !== null) {
+      throw new UnsupportedFileError("That file claims to be " + mime + " but its bytes look like " + signature.toUpperCase() + ", not " + wanted.toUpperCase() + ".");
+    }
+  }
+  if (ext === ".pdf" && mime !== "application/pdf" && signature === "pdf") {
+    /* PDF detected by bytes even when the MIME tag is generic */
+  }
 
   if (IMAGE_MIMES.has(mime)) {
     if (input.bytes.byteLength > MAX_IMAGE_BYTES) {
@@ -215,36 +399,52 @@ export async function extractFile(input: { name: string; mime: string; bytes: Bu
     }
     return {
       kind: "image",
-      dataUrl: `data:${mime};base64,${input.bytes.toString("base64")}`,
+      dataUrl: "data:" + mime + ";base64," + input.bytes.toString("base64"),
       truncated: false,
     };
   }
 
-  if (mime === "application/pdf" || extensionOf(name) === ".pdf") {
+  if (mime === "application/pdf" || ext === ".pdf") {
+    if (signature !== "pdf") {
+      throw new UnsupportedFileError("That file is named as a PDF but does not start with a PDF signature — is it really a PDF?");
+    }
     return extractPdf(input.bytes);
   }
 
   const docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-  if (mime === docxMime || extensionOf(name) === ".docx") {
+  if (mime === docxMime || ext === ".docx") {
+    if (signature !== "zip") {
+      throw new UnsupportedFileError("A .docx file must be a ZIP container; these bytes do not look like one.");
+    }
     return extractDocx(input.bytes);
   }
-  if (mime === "application/msword" || extensionOf(name) === ".doc") {
+  if (mime === "application/msword" || ext === ".doc") {
     throw new UnsupportedFileError(
       "Legacy .doc files are not supported yet. Save the document as .docx or PDF and upload it again."
     );
   }
 
-  if (SPREADSHEET_MIMES.has(mime) || [".xlsx", ".xls"].includes(extensionOf(name))) {
+  if (SPREADSHEET_MIMES.has(mime) || [".xlsx", ".xls"].includes(ext)) {
+    if (signature !== "zip") {
+      throw new UnsupportedFileError("A .xlsx/.xls file must be a ZIP container; these bytes do not look like one.");
+    }
     return extractSpreadsheet(input.bytes);
   }
 
+  if (mime === "application/zip" || ext === ".zip" || (signature === "zip" && ext !== ".docx" && ext !== ".xlsx")) {
+    return extractZip(input.bytes);
+  }
+
   if (isTextLike(mime, name)) {
+    if (input.bytes.includes(0)) {
+      throw new UnsupportedFileError("That file looks binary rather than text. ZIP and office formats are extracted from their own containers.");
+    }
     const { text, truncated } = clamp(input.bytes.toString("utf8"));
-    const kind: AttachmentKind = extensionOf(name) === ".csv" || extensionOf(name) === ".tsv" ? "spreadsheet" : "text";
+    const kind: AttachmentKind = ext === ".csv" || ext === ".tsv" ? "spreadsheet" : "text";
     return { kind, text, truncated };
   }
 
   throw new UnsupportedFileError(
-    `Conduit cannot read ${mime || extensionOf(name) || "that file type"} yet. Supported: text/code, CSV, JSON, PDF, DOCX, XLSX, PNG, JPEG, WebP, GIF. OCR for scanned documents is planned.`
+    "Conduit cannot read " + (mime || ext || "that file type") + " yet. Supported: text/code, CSV, JSON, PDF, DOCX, XLSX, PNG, JPEG, WebP, GIF, and ZIP archives. OCR for scanned documents isn't bundled."
   );
 }

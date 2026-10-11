@@ -223,6 +223,11 @@ export function ToolsManager() {
                 <span className="min-w-0">
                   <span className="font-medium">{spec.label}</span>
                   <span className="block text-muted-foreground">{spec.description}</span>
+                  {spec.egress?.kind === "thirdParty" ? (
+                    <span className="block text-[11px] text-muted-foreground">
+                      Sends data to {spec.egress.destination ?? "a third party"}
+                    </span>
+                  ) : null}
                 </span>
               </li>
               ))}

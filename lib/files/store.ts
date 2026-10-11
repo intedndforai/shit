@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { attachments, type Attachment } from "@/lib/db/schema";
+import { attachments, type Attachment, type ContentPart } from "@/lib/db/schema";
 import { attachmentPath, writeAttachmentBytes } from "./storage";
 import { UnsupportedFileError, extractFile } from "./extract";
 
@@ -16,6 +16,7 @@ export interface AttachmentDto {
   text?: string;
   dataUrl?: string;
   truncated: boolean;
+  note?: string;
   url: string;
   createdAt: number;
 }
@@ -30,6 +31,7 @@ export function toAttachmentDto(row: Attachment, dataUrl?: string): AttachmentDt
     text: row.text ?? undefined,
     dataUrl,
     truncated: row.truncated,
+    note: row.note ?? undefined,
     url: `/api/files/${row.id}`,
     createdAt: row.createdAt.getTime(),
   };
@@ -62,6 +64,7 @@ export async function storeAttachment(input: {
       storagePath: attachmentPath(id),
       text: extracted.text ?? null,
       truncated: extracted.truncated,
+      note: extracted.note ?? null,
     })
     .returning()
     .get();
@@ -74,6 +77,24 @@ export async function storeAttachment(input: {
   }
 
   return toAttachmentDto(created, extracted.dataUrl);
+}
+
+/**
+ * Attach stored files to the message that carried them, so a chat's uploads can
+ * be found (and later cleaned up) instead of drifting as orphaned rows.
+ */
+export function linkAttachments(chatId: string, messageId: string, parts: ContentPart[]): void {
+  const ids = parts
+    .map((part) =>
+      part.kind === "image" || part.kind === "document" ? part.attachmentId : undefined
+    )
+    .filter((id): id is string => Boolean(id));
+  if (!ids.length) return;
+
+  const db = getDb();
+  for (const id of ids) {
+    db.update(attachments).set({ chatId, messageId }).where(eq(attachments.id, id)).run();
+  }
 }
 
 export { UnsupportedFileError };

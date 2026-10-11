@@ -1,14 +1,20 @@
 "use client";
 
 import * as React from "react";
-import { ArrowUp, Compass, Paperclip, Square, Sparkles, X } from "lucide-react";
+import { ArrowUp, Compass, Paperclip, ShieldAlert, Square, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AttachmentChips } from "@/components/chat/attachments/attachment-chips";
 import { ChatControls } from "@/components/chat/chat-controls";
 import { ToolsMenu } from "@/components/chat/tools-menu";
+import { PrivacyBadge } from "@/components/privacy/privacy-badge";
+import { SendInspector } from "@/components/privacy/send-inspector";
+import { PrivacyBlockDialog } from "@/components/privacy/privacy-block-dialog";
 import { useUIStore, type DraftAttachment } from "@/lib/store/ui-store";
-import { api, type ModelOptionDto, type PromptDto } from "@/lib/api-client";
+import { useChatStore } from "@/lib/store/chat-store";
+import { api, type ModelOptionDto, type PromptDto, type PrivacyStateDto } from "@/lib/api-client";
+import { prepareImageForUpload } from "@/lib/files/image-client";
+import { estimateTokens } from "@/lib/tokens";
 import { cn, isMacPlatform } from "@/lib/utils";
 
 /** Fills `<{text}>` (or appends) with whatever is already in the composer. */
@@ -26,11 +32,13 @@ function applyPrompt(content: string, text: string): string {
  */
 export function Composer({
   onSend,
+  lastUserText,
   onStop,
   streaming = false,
   disabled = false,
 }: {
   onSend: (text: string) => void;
+  lastUserText?: string | null;
   onStop?: () => void;
   streaming?: boolean;
   disabled?: boolean;
@@ -38,6 +46,7 @@ export function Composer({
   const draft = useUIStore((state) => state.composerDraft);
   const setDraft = useUIStore((state) => state.setComposerDraft);
   const attachments = useUIStore((state) => state.attachments);
+  const chatModelId = useChatStore((state) => state.chatModelId);
   const addAttachments = useUIStore((state) => state.addAttachments);
   const updateAttachment = useUIStore((state) => state.updateAttachment);
   const pendingModelId = useUIStore((state) => state.pendingModelId);
@@ -45,11 +54,85 @@ export function Composer({
   const researchMode = useUIStore((state) => state.researchMode);
   const setResearchMode = useUIStore((state) => state.setResearchMode);
 
+  // Privacy badges: the mode comes from the chat, the destination from the
+  // workspace privacy state (Section 5).
+  const providerId = useChatStore((state) => state.chatProviderId);
+  const privacyMode = useChatStore((state) => state.chatPrivacyMode);
+  const messages = useChatStore((state) => state.messages);
+  const [privacyState, setPrivacyState] = React.useState<PrivacyStateDto | null>(null);
+
+  React.useEffect(() => {
+    let alive = true;
+    api
+      .getPrivacy()
+      .then((state) => {
+        if (alive) setPrivacyState(state);
+      })
+      .catch(() => {
+        /* the badge simply falls back to the mode */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [providerId]);
+
+  const activeProvider = privacyState?.providers.find((provider) => provider.id === providerId) ?? null;
+
+  const redactionNotice = React.useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.role === "assistant") {
+        return message.redactions?.applied ? message.redactions : null;
+      }
+    }
+    return null;
+  }, [messages]);
+
+  /** Builds the "what will be sent" payload from the live composer state. */
+  const buildPreviewRequest = React.useCallback((): Record<string, unknown> => {
+    const store = useChatStore.getState();
+    const files = useUIStore
+      .getState()
+      .attachments.filter((attachment) => attachment.status === "ready");
+    const parts = files.map((attachment) =>
+      attachment.kind === "image" || attachment.mime.startsWith("image/")
+        ? { kind: "image", alt: attachment.name, attachmentId: attachment.serverId }
+        : {
+            kind: "document",
+            name: attachment.name,
+            mime: attachment.mime,
+            attachmentId: attachment.serverId,
+            text: attachment.text,
+          }
+    );
+    const trimmed = useUIStore.getState().composerDraft.trim();
+    const message =
+      parts.length && trimmed
+        ? [{ kind: "text", text: trimmed }, ...parts]
+        : parts.length
+          ? parts
+          : trimmed || undefined;
+    const ephemeral =
+      store.chatIncognito || store.chatPrivacyMode === "incognito" || store.chatPrivacyMode === "local";
+    return {
+      chatId: store.chatId,
+      message,
+      toolsEnabled: useUIStore.getState().pendingTools,
+      modelId: useUIStore.getState().pendingModelId ?? undefined,
+      history: ephemeral
+        ? store.messages
+            .filter((item) => !item.streaming)
+            .map((item) => ({ role: item.role, content: item.content }))
+        : undefined,
+    };
+  }, []);
+
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = React.useState(false);
   const [prompts, setPrompts] = React.useState<PromptDto[]>([]);
   const [models, setModels] = React.useState<ModelOptionDto[]>([]);
+  const [modelsLoaded, setModelsLoaded] = React.useState(false);
   // "/command" opens the saved-prompt menu; a bare "@" token switches model.
   const commandQuery = /^\/([a-z0-9-]*)$/i.exec(draft.trim())?.[1]?.toLowerCase() ?? null;
   const modelQuery = /(?:^|\s)@([a-z0-9._:-]*)$/i.exec(draft)?.[1]?.toLowerCase() ?? null;
@@ -66,7 +149,21 @@ export function Composer({
     }));
   const readyCount = attachments.filter((attachment) => attachment.status === "ready").length;
   const uploading = attachments.some((attachment) => attachment.status === "uploading");
-  const canSend = Boolean(draft.trim() || readyCount) && !uploading && !streaming && !disabled;
+
+  // Image routing: only a vision-configured model may receive an image. The
+  // server enforces this too; the composer explains it before the turn is sent.
+  const activeModelId = pendingModelId ?? chatModelId;
+  const activeModel =
+    models.find((model) => model.id === activeModelId) ?? models.find((model) => model.isDefault) ?? null;
+  const hasImages = attachments.some(
+    (attachment) =>
+      attachment.status !== "error" && (attachment.kind === "image" || attachment.mime.startsWith("image/"))
+  );
+  const visionUnavailable =
+    hasImages && modelsLoaded && (activeModel === null || activeModel.capabilities?.vision !== true);
+
+  const canSend =
+    Boolean(draft.trim() || readyCount) && !uploading && !streaming && !disabled && !visionUnavailable;
 
   const commandMatches = React.useMemo(
     () =>
@@ -105,7 +202,6 @@ export function Composer({
   }, []);
 
   React.useEffect(() => {
-    if (modelQuery === null || models.length) return;
     let cancelled = false;
     api
       .listAllModels()
@@ -113,12 +209,15 @@ export function Composer({
         if (!cancelled) setModels(stored);
       })
       .catch(() => {
-        /* no models to mention yet */
+        /* the @-mention picker and the vision check stay unavailable */
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoaded(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [modelQuery, models.length]);
+  }, []);
 
   const pendingModel = models.find((model) => model.id === pendingModelId) ?? null;
 
@@ -145,15 +244,22 @@ export function Composer({
         mime: file.type || "application/octet-stream",
         size: file.size,
         status: "uploading",
+        progress: 0,
       }));
       addAttachments(drafts);
 
       await Promise.all(
         drafts.map(async (draft, index) => {
           try {
-            const { file } = await api.uploadFile(files[index]);
+            // Shrink large photos in the browser before they ever leave it.
+            const prepared = await prepareImageForUpload(files[index]);
+            const { file } = await api.uploadFile(prepared, (percent) =>
+              updateAttachment(draft.id, { progress: percent })
+            );
+            const tokens = file.kind === "image" ? 1024 : file.text ? estimateTokens(file.text) : undefined;
             updateAttachment(draft.id, {
               status: "ready",
+              serverId: file.id,
               kind: file.kind,
               mime: file.mime,
               size: file.size,
@@ -161,6 +267,9 @@ export function Composer({
               dataUrl: file.dataUrl,
               url: file.url,
               truncated: file.truncated,
+              note: file.note,
+              progress: 100,
+              tokens,
             });
           } catch (error) {
             updateAttachment(draft.id, {
@@ -205,6 +314,11 @@ export function Composer({
       setDraft(draft.trim() === "/" || /(?:^|\s)@[a-z0-9._:-]*$/i.test(draft) ? "" : draft);
       return;
     }
+    if (event.key === "ArrowUp" && !draft.trim() && !menu && lastUserText) {
+      event.preventDefault();
+      setDraft(lastUserText ?? "");
+      return;
+    }
     if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
       event.preventDefault();
       submit();
@@ -247,6 +361,14 @@ export function Composer({
         ) : null}
 
         <AttachmentChips />
+
+        {visionUnavailable ? (
+          <p className="border-b border-border px-4 py-2 text-xs text-destructive">
+            {activeModel
+              ? `${activeModel.displayName ?? activeModel.externalId} is not configured for vision. Remove the image attachments, type @ to switch to a vision model, or enable vision for this model in Settings.`
+              : "No model is configured yet, so images cannot be sent. Add a provider and model in Settings."}
+          </p>
+        ) : null}
 
         {menu === "command" && commandMatches.length ? (
           <ul className="border-b border-border px-1.5 py-1" role="listbox" aria-label="Slash commands">
@@ -322,7 +444,7 @@ export function Composer({
             type="file"
             multiple
             className="hidden"
-            accept=".txt,.md,.markdown,.csv,.tsv,.json,.log,.yaml,.yml,.xml,.html,.css,.js,.mjs,.cjs,.ts,.tsx,.py,.sql,.sh,.pdf,.docx,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.gif"
+            accept=".txt,.md,.markdown,.csv,.tsv,.json,.log,.yaml,.yml,.xml,.html,.css,.js,.mjs,.cjs,.ts,.tsx,.py,.sql,.sh,.pdf,.docx,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.gif,.zip"
             onChange={(event) => {
               const files = Array.from(event.target.files ?? []);
               event.target.value = "";
@@ -341,12 +463,52 @@ export function Composer({
                 <Paperclip className="size-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Attach text, PDF, DOCX, XLSX, or images</TooltipContent>
+            <TooltipContent>Attach text, PDF, DOCX, XLSX, images, or a ZIP archive</TooltipContent>
           </Tooltip>
 
           <ToolsMenu />
 
           <ChatControls />
+
+          <PrivacyBadge
+            mode={privacyMode}
+            destination={
+              activeProvider
+                ? {
+                    kind: activeProvider.local ? "local" : "provider",
+                    label: activeProvider.name,
+                    host: activeProvider.host,
+                  }
+                : undefined
+            }
+            policyLabel={activeProvider?.label ?? null}
+          />
+
+          <SendInspector buildRequest={buildPreviewRequest} />
+
+          {redactionNotice ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="flex items-center gap-1 rounded-full border border-border bg-secondary/50 px-2 py-0.5 text-[11px] text-muted-foreground">
+                  <ShieldAlert className="size-3" aria-hidden />
+                  {redactionNotice.total} masked
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                <p>
+                  {redactionNotice.total} value{redactionNotice.total === 1 ? "" : "s"} masked before this request
+                  — the answer may be less specific. Originals were restored in the reply.
+                </p>
+                <ul className="mt-1 space-y-0.5 text-xs">
+                  {redactionNotice.items.map((item) => (
+                    <li key={item.placeholder} className="font-mono">
+                      {item.placeholder} · {item.preview}
+                    </li>
+                  ))}
+                </ul>
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
 
           <Tooltip>
             <TooltipTrigger asChild>
@@ -424,8 +586,10 @@ export function Composer({
         </div>
       </div>
       <p className="px-1 pt-2 text-center text-[11px] text-muted-foreground">
-        Conduit never ships with a hardcoded AI vendor. You choose the Base URL and key.
+        Conduit never ships with a hardcoded AI vendor. Provider policy labels are user-declared —
+        Conduit cannot verify what a third-party provider does with your data.
       </p>
+      <PrivacyBlockDialog />
     </div>
   );
 }

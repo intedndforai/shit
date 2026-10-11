@@ -31,6 +31,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api, type ProjectDto, type ProjectFileDto } from "@/lib/api-client";
+import { ProjectSkills } from "@/components/projects/project-skills";
 import { useChatStore } from "@/lib/store/chat-store";
 import { formatBytes, formatRelativeTime } from "@/lib/utils";
 
@@ -365,6 +366,8 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         </CardContent>
       </Card>
 
+
+      <ProjectSkills projectId={projectId} />
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

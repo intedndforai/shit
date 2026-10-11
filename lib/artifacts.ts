@@ -67,3 +67,46 @@ export function stripArtifacts(text: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * A single self-contained HTML file with no remote references, for download.
+ * HTML and SVG artifacts keep their markup; every other type is escaped into a
+ * monospace document so the exported file is still readable.
+ */
+export function toStandaloneHtml(artifact: {
+  identifier: string;
+  type: ArtifactKind;
+  title: string | null;
+  content: string;
+}): string {
+  const title = escapeHtml(artifact.title ?? artifact.identifier);
+  const inline =
+    artifact.type === "html" || artifact.type === "svg"
+      ? artifact.content
+      : `<pre style="white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${escapeHtml(
+          artifact.content
+        )}</pre>`;
+
+  return [
+    "<!doctype html>",
+    '<html lang="en">',
+    "  <head>",
+    '    <meta charset="utf-8" />',
+    '    <meta name="viewport" content="width=device-width, initial-scale=1" />',
+    "    <title>" + title + "</title>",
+    "  </head>",
+    "  <body>",
+    inline,
+    "  </body>",
+    "</html>",
+    "",
+  ].join("\n");
+}

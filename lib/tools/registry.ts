@@ -3,7 +3,7 @@ import { getAttachment } from "@/lib/files/store";
 import { analyseCsv } from "./csv-stats";
 import { FetchError, fetchUrl } from "./fetch-url";
 import { evaluateExpression, ExpressionError } from "./math";
-import { SearchNotConfiguredError, readToolsConfig, webSearch } from "./web-search";
+import { SearchNotConfiguredError, readToolsConfig, searchDestination, webSearch } from "./web-search";
 import { UnitError, convertUnits } from "./units";
 import { callMcpTool, enabledMcpTools, findToolByExposedName } from "@/lib/mcp/client";
 import { customToolsForModel, findCustomToolByExposed, runCustomTool } from "./custom";
@@ -30,6 +30,24 @@ export interface ToolSpec extends ToolDefinition {
   execution?: "server" | "client";
   /** Ask the user before running, then show the output inline. */
   requiresApproval?: boolean;
+  /** Where this tool sends data (Section 3.10). */
+  dataEgress?: ToolEgressInfo;
+}
+
+export interface ToolEgressInfo {
+  kind: "none" | "local" | "thirdParty";
+  /** Host or short destination, when the tool leaves the machine. */
+  destination?: string;
+  note?: string;
+}
+
+/** Hostname helper that never throws on a malformed URL. */
+function hostOf(value: string): string {
+  try {
+    return new URL(value).hostname || value;
+  } catch {
+    return value.replace(/^https?:\/\//i, "").split("/")[0] || value;
+  }
 }
 
 export const TOOL_SPECS: ToolSpec[] = [
@@ -45,6 +63,11 @@ export const TOOL_SPECS: ToolSpec[] = [
     },
     defaultEnabled: true,
     requiresConfig: true,
+    dataEgress: {
+      kind: "thirdParty",
+      destination: "search backend",
+      note: "Sends the (redacted) search query and nothing else — never the conversation.",
+    },
   },
   {
     name: "fetch_url",
@@ -57,6 +80,11 @@ export const TOOL_SPECS: ToolSpec[] = [
       required: ["url"],
     },
     defaultEnabled: true,
+    dataEgress: {
+      kind: "thirdParty",
+      destination: "the URL you fetch",
+      note: "Sends the request to the destination host; Conduit sends no cookies, keys, or chat content.",
+    },
   },
   {
     name: "calculator",
@@ -69,6 +97,7 @@ export const TOOL_SPECS: ToolSpec[] = [
       required: ["expression"],
     },
     defaultEnabled: true,
+    dataEgress: { kind: "none" },
   },
   {
     name: "current_time",
@@ -76,6 +105,7 @@ export const TOOL_SPECS: ToolSpec[] = [
     description: "Get the current date and time in ISO 8601 with the server's time zone.",
     parameters: { type: "object", properties: {} },
     defaultEnabled: true,
+    dataEgress: { kind: "none" },
   },
   {
     name: "analyze_csv",
@@ -90,6 +120,7 @@ export const TOOL_SPECS: ToolSpec[] = [
       },
     },
     defaultEnabled: true,
+    dataEgress: { kind: "none" },
   },
   {
     name: "convert_units",
@@ -106,6 +137,7 @@ export const TOOL_SPECS: ToolSpec[] = [
       required: ["value", "from", "to"],
     },
     defaultEnabled: true,
+    dataEgress: { kind: "none" },
   },
   {
     name: "run_python",
@@ -122,6 +154,11 @@ export const TOOL_SPECS: ToolSpec[] = [
     defaultEnabled: true,
     execution: "client",
     requiresApproval: true,
+    dataEgress: {
+      kind: "thirdParty",
+      destination: "cdn.jsdelivr.net",
+      note: "Runs in your browser, but Pyodide and its optional packages are fetched from cdn.jsdelivr.net on first use. Disabled in Strict Local mode.",
+    },
   },
   {
     name: "run_javascript",
@@ -137,6 +174,7 @@ export const TOOL_SPECS: ToolSpec[] = [
     defaultEnabled: true,
     execution: "client",
     requiresApproval: true,
+    dataEgress: { kind: "local", note: "Runs in a sandboxed Web Worker in your browser. No network access." },
   },
 ];
 
@@ -177,6 +215,11 @@ export function toolSpec(name: string): ToolSpec | undefined {
       defaultEnabled: false,
       execution: "server",
       requiresApproval: mcp.server.requiresApproval,
+      dataEgress: {
+        kind: "thirdParty",
+        destination: hostOf(mcp.server.url),
+        note: `Sends the tool arguments to the MCP server (${mcp.server.name}).`,
+      },
     };
   }
 
@@ -190,10 +233,60 @@ export function toolSpec(name: string): ToolSpec | undefined {
       defaultEnabled: false,
       execution: "server",
       requiresApproval: custom.tool.requiresApproval,
+      dataEgress: {
+        kind: "thirdParty",
+        destination: hostOf(custom.tool.url),
+        note: `Sends the tool arguments to ${custom.tool.label}.`,
+      },
     };
   }
 
   return undefined;
+}
+
+/** Egress classification for a tool, resolving live search/MCP/custom destinations. */
+export function toolEgress(name: string): ToolEgressInfo {
+  const builtin = TOOL_SPECS.find((spec) => spec.name === name);
+  if (builtin) {
+    if (builtin.name === "web_search") {
+      return { ...(builtin.dataEgress ?? { kind: "thirdParty" }), destination: searchDestination() };
+    }
+    return builtin.dataEgress ?? { kind: "none" };
+  }
+
+  const mcp = enabledMcpTools().find((entry) => entry.tool.exposed === name);
+  if (mcp) {
+    return {
+      kind: "thirdParty",
+      destination: hostOf(mcp.server.url),
+      note: `Sends the tool arguments to the MCP server (${mcp.server.name}).`,
+    };
+  }
+
+  const custom = customToolsForModel().find((entry) => entry.tool.exposed === name);
+  if (custom) {
+    return {
+      kind: "thirdParty",
+      destination: hostOf(custom.tool.url),
+      note: `Sends the tool arguments to ${custom.tool.label}.`,
+    };
+  }
+
+  return { kind: "none" };
+}
+
+/** Coarse egress category for the metadata-only log (Section 3.2). */
+export function toolEgressKind(name: string): "search" | "fetch" | "mcp" | "custom" | "tool" {
+  if (name === "web_search") return "search";
+  if (name === "fetch_url") return "fetch";
+  if (enabledMcpTools().some((entry) => entry.tool.exposed === name)) return "mcp";
+  if (customToolsForModel().some((entry) => entry.tool.exposed === name)) return "custom";
+  return "tool";
+}
+
+/** True when a tool may run in Strict Local mode (no third-party egress). */
+export function isLocallyPermittedTool(name: string): boolean {
+  return toolEgress(name).kind !== "thirdParty";
 }
 
 export function resolveToolNames(requested?: string[]): string[] {
@@ -241,6 +334,8 @@ export interface ToolPayload {
   parameters: Record<string, unknown>;
   source: "builtin" | "mcp" | "custom";
   server?: string;
+  /** Where the tool sends data; drives the approval dialog (Section 3.10). */
+  egress: ToolEgressInfo;
 }
 
 export function toolPayloads(): ToolPayload[] {
@@ -256,6 +351,7 @@ export function toolPayloads(): ToolPayload[] {
     requiresApproval: Boolean(tool.requiresApproval),
     parameters: tool.parameters ?? {},
     source: "builtin",
+    egress: tool.name === "web_search" ? { ...(tool.dataEgress ?? { kind: "thirdParty" as const }), destination: searchDestination() } : tool.dataEgress ?? { kind: "none" as const },
   }));
 
   for (const entry of enabledMcpTools()) {
@@ -271,6 +367,7 @@ export function toolPayloads(): ToolPayload[] {
       parameters: entry.tool.inputSchema,
       source: "mcp",
       server: entry.server.name,
+      egress: { kind: "thirdParty", destination: hostOf(entry.server.url), note: `MCP server: ${entry.server.name}` },
     });
   }
 
@@ -286,6 +383,7 @@ export function toolPayloads(): ToolPayload[] {
       requiresApproval: entry.tool.requiresApproval,
       parameters: entry.tool.parameters,
       source: "custom",
+      egress: { kind: "thirdParty", destination: hostOf(entry.tool.url), note: entry.tool.label },
     });
   }
 

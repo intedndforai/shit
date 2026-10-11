@@ -22,6 +22,7 @@ const createSchema = z.object({
   projectId: z.string().nullable().optional(),
   styleId: z.string().nullable().optional(),
   incognito: z.boolean().optional(),
+  privacyMode: z.enum(["standard", "private", "incognito", "local"]).optional(),
   /** Per-chat tool selection; null means "use the registry defaults". */
   toolsEnabled: z.array(z.string()).nullable().optional(),
 });
@@ -39,7 +40,8 @@ export async function POST(request: Request) {
       systemPrompt: parsed.data.systemPrompt ?? null,
       projectId: parsed.data.projectId ?? null,
       styleId: parsed.data.styleId ?? null,
-      incognito: parsed.data.incognito ?? false,
+      incognito: parsed.data.incognito ?? parsed.data.privacyMode === "incognito",
+      privacyMode: parsed.data.privacyMode,
       toolsEnabled: parsed.data.toolsEnabled ?? null,
     });
     return jsonOk({ chat }, 201);

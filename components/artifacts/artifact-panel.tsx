@@ -3,13 +3,14 @@
 import * as React from "react";
 import Link from "next/link";
 import { createTwoFilesPatch } from "diff";
-import { Blocks, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, GitCompare, X } from "lucide-react";
+import { Blocks, ChevronLeft, ChevronRight, Copy, Download, FileCode2, GitCompare, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ArtifactView } from "@/components/artifacts/artifact-view";
 import { api, type ArtifactDto } from "@/lib/api-client";
+import { toStandaloneHtml } from "@/lib/artifacts";
 import { useChatStore } from "@/lib/store/chat-store";
 import { useUIStore } from "@/lib/store/ui-store";
 import { cn } from "@/lib/utils";
@@ -21,6 +22,7 @@ export function ArtifactPanel() {
   const chatId = useChatStore((state) => state.chatId);
   const messages = useChatStore((state) => state.messages);
   const streaming = useChatStore((state) => state.streaming);
+  const send = useChatStore((state) => state.send);
 
   const [artifacts, setArtifacts] = React.useState<ArtifactDto[]>([]);
   const [versions, setVersions] = React.useState<ArtifactDto[]>([]);
@@ -86,6 +88,20 @@ export function ArtifactPanel() {
   );
   const current = availableVersions[versionIndex] ?? selected;
 
+  // Preview failures are only handed to the model when the user asks for a fix.
+  const requestFix = React.useCallback(
+    (message: string) => {
+      if (!current || streaming) return;
+      const label = current.title ?? current.identifier;
+      void send(
+        `The ${current.type} artifact "${label}" failed in its sandboxed preview with this error:\n\n${message}\n\n` +
+          `Return a corrected version as a single <artifact identifier="${current.identifier}" type="${current.type}" title="${label}"> block. ` +
+          "Keep it self-contained: no remote scripts, styles, fonts, or network requests."
+      );
+    },
+    [current, send, streaming]
+  );
+
   const diffText = React.useMemo(() => {
     if (availableVersions.length < 2) return "";
     const previous = availableVersions[Math.max(0, versionIndex - 1)];
@@ -99,25 +115,45 @@ export function ArtifactPanel() {
     );
   }, [availableVersions, versionIndex]);
 
-  const download = () => {
-    if (!current) return;
-    const blob = new Blob([current.content], { type: "text/plain;charset=utf-8" });
+  const saveBlob = (content: string, filename: string, type: string) => {
+    const blob = new Blob([content], { type });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${current.identifier}.${current.type === "markdown" ? "md" : current.type}`;
+    anchor.download = filename;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(url);
   };
 
-  const openPreview = () => {
+  const extensionFor = (type: ArtifactDto["type"]): string => {
+    switch (type) {
+      case "markdown":
+        return "md";
+      case "react":
+        return "tsx";
+      case "mermaid":
+        return "mmd";
+      case "svg":
+        return "svg";
+      case "html":
+        return "html";
+      default:
+        return "txt";
+    }
+  };
+
+  const downloadSource = () => {
     if (!current) return;
-    const blob = new Blob([current.content], { type: "text/html;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    window.open(url, "_blank", "noopener,noreferrer");
-    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    saveBlob(current.content, `${current.identifier}.${extensionFor(current.type)}`, "text/plain;charset=utf-8");
+  };
+
+  // Exported HTML is opened from the user's disk (a file:// origin), never from
+  // the app's origin, so an untrusted artifact cannot reach Conduit's storage.
+  const exportHtml = () => {
+    if (!current) return;
+    saveBlob(toStandaloneHtml(current), `${current.identifier}.html`, "text/html;charset=utf-8");
   };
 
   if (!open) return null;
@@ -237,11 +273,16 @@ export function ArtifactPanel() {
                   >
                     <Copy className="size-3.5" />
                   </Button>
-                  <Button variant="ghost" size="icon-sm" aria-label="Download artifact" onClick={download}>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Download artifact source"
+                    onClick={downloadSource}
+                  >
                     <Download className="size-3.5" />
                   </Button>
-                  <Button variant="ghost" size="icon-sm" aria-label="Open preview in a new tab" onClick={openPreview}>
-                    <ExternalLink className="size-3.5" />
+                  <Button variant="ghost" size="icon-sm" aria-label="Export standalone HTML" onClick={exportHtml}>
+                    <FileCode2 className="size-3.5" />
                   </Button>
                 </div>
               </div>
@@ -252,7 +293,7 @@ export function ArtifactPanel() {
                     {diffText}
                   </pre>
                 ) : (
-                  <ArtifactView artifact={current} />
+                  <ArtifactView artifact={current} onRequestFix={streaming ? undefined : requestFix} />
                 )}
               </div>
 

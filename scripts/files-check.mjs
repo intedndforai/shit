@@ -203,6 +203,78 @@ if (txt.body?.file?.id) {
   );
 }
 
+/* --- ZIP archives, archive safety, and scanned PDFs (M4) ---------------- */
+
+function zipOf(entries) {
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const name = Buffer.from(entry.name, "utf8");
+    const data = Buffer.from(entry.data, "utf8");
+    const crc = crc32(data);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    chunks.push(local, name, data);
+    const dir = Buffer.alloc(46);
+    dir.writeUInt32LE(0x02014b50, 0);
+    dir.writeUInt16LE(20, 4);
+    dir.writeUInt16LE(20, 6);
+    dir.writeUInt32LE(crc, 16);
+    dir.writeUInt32LE(data.length, 20);
+    dir.writeUInt32LE(data.length, 24);
+    dir.writeUInt16LE(name.length, 28);
+    dir.writeUInt32LE(offset, 42);
+    central.push(dir, name);
+    offset += local.length + name.length + data.length;
+  }
+  const centralBuffer = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(centralBuffer.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...chunks, centralBuffer, end]);
+}
+
+const archive = await upload(
+  "bundle.zip",
+  "application/zip",
+  zipOf([
+    { name: "readme.txt", data: "Archived note about conduit" },
+    { name: "nested/data.md", data: "# Nested heading" },
+  ])
+);
+check(
+  "zip entries extracted with their paths",
+  archive.status === 201 &&
+    String(archive.body?.file?.text ?? "").includes("Archived note about conduit") &&
+    String(archive.body?.file?.text ?? "").includes("# nested/data.md"),
+  archive.body?.file?.kind
+);
+
+const traversal = await upload("evil.zip", "application/zip", zipOf([{ name: "/etc/evil.txt", data: "nope" }]));
+check(
+  "absolute-path archive rejected",
+  traversal.status === 415,
+  String(traversal.body?.error ?? "").slice(0, 60)
+);
+
+const scanned = await upload("scan.pdf", "application/pdf", minimalPdf(""));
+check(
+  "scanned pdf reports a note instead of failing",
+  scanned.status === 201 &&
+    !String(scanned.body?.file?.text ?? "").trim() &&
+    /no selectable text/i.test(String(scanned.body?.file?.note ?? "")),
+  String(scanned.body?.file?.note ?? scanned.body?.error ?? "").slice(0, 70)
+);
+
 const failed = results.filter((result) => !result.ok).length;
 console.log(`\n${results.length - failed}/${results.length} attachment checks passed`);
 process.exitCode = failed ? 1 : 0;

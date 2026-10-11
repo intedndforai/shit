@@ -291,6 +291,17 @@ function buildFrames(body) {
     };
   }
 
+  // "echo" streams the request text straight back (placeholder-restore check).
+  // Conduit redacts before egress, so the provider only ever sees [EMAIL_1]-style
+  // tokens; echoing them back proves the client restores the real values.
+  if (/echo/i.test(question) && !/mcp-echo/i.test(question)) {
+    const text = question;
+    return {
+      frames: text.split(/(\s+)/).filter(Boolean).map((chunk) => ({ content: chunk })),
+      text,
+    };
+  }
+
   const text = /artifact/i.test(question) ? artifactReply(question) : plainReply(question);
   return {
     frames: text.split(" ").map((word, index) => ({ content: `${index === 0 ? "" : " "}${word}` })),

@@ -20,17 +20,42 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-async function upload<T>(url: string, form: FormData): Promise<T> {
-  const response = await fetch(url, { method: "POST", body: form });
-  const text = await response.text();
-  const payload = text ? (JSON.parse(text) as unknown) : {};
-
-  if (!response.ok) {
-    const message = (payload as { error?: string }).error ?? `Upload failed with status ${response.status}.`;
-    throw new Error(message);
-  }
-
-  return payload as T;
+async function upload<T>(
+  url: string,
+  form: FormData,
+  onProgress?: (percent: number) => void
+): Promise<T> {
+  // XMLHttpRequest rather than fetch so the composer can show real upload
+  // progress; fetch still has no portable upload-progress event.
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.upload.onprogress = (event) => {
+      if (onProgress && event.lengthComputable && event.total > 0) {
+        onProgress(Math.min(99, Math.round((event.loaded / event.total) * 100)));
+      }
+    };
+    xhr.onload = () => {
+      let payload: unknown = {};
+      try {
+        payload = xhr.responseText ? JSON.parse(xhr.responseText) : {};
+      } catch {
+        payload = {};
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress?.(100);
+        resolve(payload as T);
+        return;
+      }
+      const message =
+        (payload as { error?: string }).error ??
+        (xhr.status === 0 ? "The upload could not reach the server." : `Upload failed with status ${xhr.status}.`);
+      reject(new Error(message));
+    };
+    xhr.onerror = () => reject(new Error("The upload failed. Check your connection and try again."));
+    xhr.onabort = () => reject(new Error("The upload was cancelled."));
+    xhr.send(form);
+  });
 }
 
 export interface PublicProvider {
@@ -45,6 +70,12 @@ export interface PublicProvider {
   maskedApiKey: string;
   isDefault: boolean;
   modelCount: number;
+  dataPolicyTraining: string;
+  dataPolicyRetention: string;
+  dataPolicyRegion: string | null;
+  dataPolicyUrl: string | null;
+  dataPolicyDeclaredBy: string | null;
+  dataPolicyDeclaredAt: number | null;
 }
 
 export interface StoredModel {
@@ -80,6 +111,7 @@ export interface ChatSummary {
   title: string | null;
   modelId: string | null;
   providerId: string | null;
+  privacyMode?: string;
   pinned: boolean;
   archived: boolean;
   updatedAt: number;
@@ -119,6 +151,7 @@ export interface ChatDetail {
     styleId: string | null;
     projectId: string | null;
     incognito: boolean;
+    privacyMode: string;
     pinned: boolean;
     archived: boolean;
     activeLeafId: string | null;
@@ -164,6 +197,8 @@ export interface UploadedFile {
   text?: string;
   dataUrl?: string;
   truncated: boolean;
+  /** Partial-extraction or safety note, when the server has one. */
+  note?: string;
   url: string;
   createdAt: number;
 }
@@ -191,6 +226,8 @@ export interface ToolSpecDto {
   /** Where the tool came from, so the menu can group them. */
   source: "builtin" | "mcp" | "custom";
   server?: string;
+  /** Where the tool sends data, so Settings can warn before the first run. */
+  egress?: { kind: "none" | "local" | "thirdParty"; destination?: string; note?: string };
 }
 
 export interface ToolsState {
@@ -336,6 +373,166 @@ export interface StoredPreset {
   systemPrompt?: string | null;
 }
 
+
+export interface SkillDto {
+  id: string;
+  skillKey: string;
+  version: number;
+  name: string;
+  description: string;
+  taskTypes: string[];
+  instructions: string;
+  requiredTools: string[];
+  source: "builtin" | "user" | "imported" | "verified";
+  provenance: { url?: string | null; retrievedAt?: number | null; contentHash?: string | null };
+  trustStatus: "trusted" | "untrusted" | "reviewed";
+  integrityHash: string;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+  assignedProjects: number;
+}
+
+export interface SkillVersionDto {
+  id: string;
+  skillKey: string;
+  version: number;
+  name: string;
+  description: string;
+  taskTypes: string[];
+  instructions: string;
+  requiredTools: string[];
+  source: string;
+  provenance: { url?: string | null; retrievedAt?: number | null; contentHash?: string | null };
+  trustStatus: string;
+  integrityHash: string;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+/* ------------------------------------------------------------------ */
+/* Privacy layer (Section 3)                                           */
+/* ------------------------------------------------------------------ */
+
+export interface PrivacyPolicyDto {
+  training: string;
+  retention: string;
+  region: string | null;
+  url: string | null;
+  declaredBy: string | null;
+  declaredAt: number | null;
+}
+
+export interface PrivacyProviderDto {
+  id: string;
+  name: string;
+  apiFormat: string;
+  host: string;
+  local: boolean;
+  policy: PrivacyPolicyDto;
+  label: string;
+}
+
+export interface PrivacyModeInfoDto {
+  label: string;
+  summary: string;
+  detail: string;
+}
+
+export interface PrivacySettingsDto {
+  defaultMode: string;
+  minimumProviderPolicy: string;
+  retentionDays: number | null;
+  blockRemoteImages: boolean;
+  requireSendPreview: boolean;
+  customRedactionTerms: string[];
+  customRedactionPatterns: string[];
+}
+
+export interface StorageSummaryDto {
+  databasePath: string;
+  chats: number;
+  messages: number;
+  attachments: number;
+  artifacts: number;
+  memories: number;
+  projects: number;
+  projectFiles: number;
+  usageEvents: number;
+  egressEvents: number;
+  providers: number;
+}
+
+export interface EgressEventDto {
+  id: string;
+  chatId: string | null;
+  providerId: string | null;
+  kind: string;
+  destination: string;
+  label: string | null;
+  mode: string;
+  bytesOut: number;
+  redactionCount: number;
+  payloadHash: string | null;
+  status: string;
+  createdAt: number;
+}
+
+export interface DestinationSummaryDto {
+  destination: string;
+  kinds: string[];
+  count: number;
+  lastAt: number;
+}
+
+export interface PrivacyStateDto {
+  settings: PrivacySettingsDto;
+  summary: StorageSummaryDto;
+  destinations: DestinationSummaryDto[];
+  providers: PrivacyProviderDto[];
+  modes: Record<string, PrivacyModeInfoDto>;
+}
+
+export interface RedactionSummaryItemDto {
+  placeholder: string;
+  kind: string;
+  credential: boolean;
+  preview: string;
+  count: number;
+}
+
+export interface RedactionSummaryDto {
+  applied: boolean;
+  total: number;
+  items: RedactionSummaryItemDto[];
+}
+
+export interface PolicyGateDto {
+  allowed: boolean;
+  reasons: string[];
+  options: Array<{ kind: string; label: string; description: string }>;
+  providerLabel: string;
+  minimum: string;
+}
+
+export interface SendPreviewDto {
+  mode: string;
+  destination: { kind: string; label: string; host: string };
+  model: string;
+  policy: PrivacyPolicyDto;
+  gate: PolicyGateDto;
+  messages: { count: number; roles: Record<string, number> };
+  attachments: Array<{ name: string; kind: string; size: number }>;
+  memory: { included: boolean; items: number };
+  tools: Array<{ name: string; label: string; egress: { kind: string; destination?: string; note?: string } }>;
+  redactions: RedactionSummaryDto;
+  credentials: RedactionSummaryItemDto[];
+  systemPromptChars: number;
+  approxInputTokens: number;
+  payloadHash: string;
+  notes: string[];
+}
+
 export const api = {
   listProviders: () => request<{ providers: PublicProvider[] }>("/api/providers"),
   createProvider: (input: unknown) =>
@@ -372,6 +569,7 @@ export const api = {
     projectId?: string | null;
     styleId?: string | null;
     incognito?: boolean;
+    privacyMode?: string;
   }) =>
     request<{ chat: { id: string } }>("/api/chats", { method: "POST", body: JSON.stringify(input) }),
   getChat: (id: string) => request<ChatDetail>(`/api/chats/${id}`),
@@ -408,10 +606,10 @@ export const api = {
 
   exportUrl: (chatId: string, format: "md" | "json") => `/api/chats/${chatId}/export?format=${format}`,
 
-  uploadFile: async (file: File) => {
+  uploadFile: (file: File, onProgress?: (percent: number) => void) => {
     const form = new FormData();
     form.append("file", file);
-    return upload<{ file: UploadedFile }>("/api/files", form);
+    return upload<{ file: UploadedFile }>("/api/files", form, onProgress);
   },
   getFileUrl: (id: string) => `/api/files/${id}`,
 
@@ -560,4 +758,65 @@ export const api = {
   deleteCustomTool: (id: string) => request<{ tools: CustomToolDto[] }>(`/api/custom-tools/${id}`, { method: "DELETE" }),
   testCustomTool: (id: string) =>
     request<{ test: { status: number; preview: string } }>(`/api/custom-tools/${id}`, { method: "POST" }),
+  /* --- Privacy layer (Section 3) ----------------------------------------- */
+  getPrivacy: () => request<PrivacyStateDto>("/api/privacy"),
+  updatePrivacy: (patch: Partial<PrivacySettingsDto>) =>
+    request<{ settings: PrivacySettingsDto }>("/api/privacy", { method: "PATCH", body: JSON.stringify(patch) }),
+  privacyAction: (input: { action: "purge" | "delete-all" | "clear-egress"; includeProviders?: boolean; retentionDays?: number }) =>
+    request<{ ok: true; result?: unknown; cleared?: number }>("/api/privacy", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  getEgress: (options: { chatId?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (options.chatId) params.set("chatId", options.chatId);
+    if (options.limit) params.set("limit", String(options.limit));
+    const query = params.toString();
+    return request<{ events: EgressEventDto[]; destinations: DestinationSummaryDto[] }>(
+      `/api/privacy/egress${query ? `?${query}` : ""}`
+    );
+  },
+  clearEgress: (chatId?: string) =>
+    request<{ ok: true; cleared: number }>(
+      `/api/privacy/egress${chatId ? `?chatId=${encodeURIComponent(chatId)}` : ""}`,
+      { method: "DELETE" }
+    ),
+  sendPreview: (input: unknown) =>
+    request<{ preview: SendPreviewDto }>("/api/privacy/preview", { method: "POST", body: JSON.stringify(input) }),
+
+  /* --- Skills (M9) --------------------------------------------------------- */
+  listSkills: () => request<{ skills: SkillDto[] }>("/api/skills"),
+  createSkill: (input: {
+    name: string;
+    description?: string;
+    taskTypes?: string[];
+    instructions?: string;
+    requiredTools?: string[];
+  }) => request<{ skill: SkillDto }>("/api/skills", { method: "POST", body: JSON.stringify(input) }),
+  getSkill: (id: string) =>
+    request<{ skill: SkillDto; versions: SkillVersionDto[] }>(`/api/skills/${id}`),
+  updateSkill: (id: string, patch: Record<string, unknown>) =>
+    request<{ skill: SkillDto; versionBumped: boolean }>(`/api/skills/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  deleteSkill: (id: string) => request<{ ok: true }>(`/api/skills/${id}`, { method: "DELETE" }),
+  importSkill: (payload: unknown) =>
+    request<{ skill: SkillDto; trustStatus: string }>("/api/skills/import", {
+      method: "POST",
+      body: JSON.stringify({ payload }),
+    }),
+  exportSkill: (id: string) =>
+    request<{ skill: unknown; filename: string }>(`/api/skills/${id}`, { method: "POST" }),
+  getProjectSkills: (projectId: string) =>
+    request<{ skills: SkillDto[] }>(`/api/projects/${projectId}/skills`),
+  assignProjectSkill: (projectId: string, skillId: string) =>
+    request<{ skills: SkillDto[]; assigned: boolean }>(`/api/projects/${projectId}/skills`, {
+      method: "POST",
+      body: JSON.stringify({ skillId }),
+    }),
+  unassignProjectSkill: (projectId: string, skillId: string) =>
+    request<{ skills: SkillDto[] }>(`/api/projects/${projectId}/skills?skillId=${encodeURIComponent(skillId)}`, {
+      method: "DELETE",
+    }),
 };
