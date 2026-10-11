@@ -188,11 +188,20 @@ export interface ToolSpecDto {
   execution: "server" | "client";
   requiresApproval: boolean;
   parameters: Record<string, unknown>;
+  /** Where the tool came from, so the menu can group them. */
+  source: "builtin" | "mcp" | "custom";
+  server?: string;
 }
 
 export interface ToolsState {
   config: {
-    webSearch: { enabled: boolean; provider: "tavily" | "brave" | "serper" | "searxng"; baseUrl?: string; maxResults: number };
+    webSearch: {
+      enabled: boolean;
+      provider: "tavily" | "brave" | "serper" | "searxng" | "custom";
+      baseUrl?: string;
+      endpoint?: string;
+      maxResults: number;
+    };
     fetch: { enabled: boolean };
     code: { autoApprove: boolean };
   };
@@ -200,6 +209,64 @@ export interface ToolsState {
   maskedSearchApiKey: string;
   available: string[];
   specs: ToolSpecDto[];
+}
+
+export interface McpServerDto {
+  id: string;
+  name: string;
+  url: string;
+  transport: "http" | "sse";
+  enabled: boolean;
+  requiresApproval: boolean;
+  headers: Array<{ name: string; masked: string; secret: boolean }>;
+  toolCount: number;
+  resourceCount: number;
+  promptCount: number;
+  lastSyncedAt: number | null;
+  error: string | null;
+  serverInfo: string | null;
+}
+
+export interface McpToolDto {
+  name: string;
+  exposed: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface McpResourceDto {
+  uri: string;
+  name: string;
+  description: string;
+  mimeType: string | null;
+}
+
+export interface McpPromptDto {
+  name: string;
+  description: string;
+  arguments: Array<{ name: string; description: string; required: boolean }>;
+}
+
+export interface McpCacheDto {
+  fetchedAt: number;
+  tools: McpToolDto[];
+  resources: McpResourceDto[];
+  prompts: McpPromptDto[];
+  serverInfo: string | null;
+  error: string | null;
+}
+
+export interface CustomToolDto {
+  id: string;
+  exposed: string;
+  label: string;
+  description: string;
+  method: "GET" | "POST";
+  url: string;
+  headers: Array<{ name: string; masked: string; secret: boolean }>;
+  parameters: Record<string, unknown>;
+  requiresApproval: boolean;
+  enabled: boolean;
 }
 
 export interface ProjectDto {
@@ -430,4 +497,67 @@ export const api = {
   getProfile: () => request<{ profile: ProfileDto }>("/api/profile"),
   saveProfile: (profile: ProfileDto) =>
     request<{ profile: ProfileDto }>("/api/profile", { method: "PUT", body: JSON.stringify(profile) }),
+
+  /* --- MCP client, custom tools, Deep Research (M9) ---------------------- */
+  listMcpServers: () => request<{ servers: McpServerDto[] }>("/api/mcp"),
+  createMcpServer: (input: {
+    name: string;
+    url: string;
+    transport?: "http" | "sse";
+    enabled?: boolean;
+    requiresApproval?: boolean;
+    headers?: Array<{ name: string; value: string | null; secret?: boolean }>;
+  }) =>
+    request<{ servers: McpServerDto[]; serverId: string; synced: boolean; syncError: string | null }>("/api/mcp", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  updateMcpServer: (id: string, patch: Record<string, unknown>) =>
+    request<{ server: McpServerDto; servers: McpServerDto[] }>(`/api/mcp/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  deleteMcpServer: (id: string) => request<{ servers: McpServerDto[] }>(`/api/mcp/${id}`, { method: "DELETE" }),
+  getMcpServer: (id: string) => request<{ server: McpServerDto; cache: McpCacheDto | null }>(`/api/mcp/${id}`),
+  refreshMcpServer: (id: string) =>
+    request<{ servers: McpServerDto[]; cache: { toolCount: number; resourceCount: number; promptCount: number } }>(
+      `/api/mcp/${id}`,
+      { method: "POST", body: JSON.stringify({ action: "refresh" }) }
+    ),
+  testMcpServer: (id: string, input: { url: string; transport: "http" | "sse" }) =>
+    request<{ test: { toolCount: number; resourceCount: number; promptCount: number; serverInfo: string | null } }>(
+      `/api/mcp/${id}`,
+      { method: "POST", body: JSON.stringify({ action: "test", ...input }) }
+    ),
+  readMcpResource: (id: string, uri: string) =>
+    request<{ text: string }>(`/api/mcp/${id}`, { method: "POST", body: JSON.stringify({ action: "resource", uri }) }),
+  getMcpPrompt: (id: string, name: string, args: Record<string, string> = {}) =>
+    request<{ text: string }>(`/api/mcp/${id}`, {
+      method: "POST",
+      body: JSON.stringify({ action: "prompt", name, args }),
+    }),
+
+  listCustomTools: () => request<{ tools: CustomToolDto[] }>("/api/custom-tools"),
+  createCustomTool: (input: {
+    label: string;
+    description?: string;
+    method: "GET" | "POST";
+    url: string;
+    parameters?: Record<string, unknown>;
+    requiresApproval?: boolean;
+    enabled?: boolean;
+    headers?: Array<{ name: string; value: string | null; secret?: boolean }>;
+  }) =>
+    request<{ tool: CustomToolDto; tools: CustomToolDto[] }>("/api/custom-tools", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  updateCustomTool: (id: string, patch: Record<string, unknown>) =>
+    request<{ tool: CustomToolDto; tools: CustomToolDto[] }>(`/api/custom-tools/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  deleteCustomTool: (id: string) => request<{ tools: CustomToolDto[] }>(`/api/custom-tools/${id}`, { method: "DELETE" }),
+  testCustomTool: (id: string) =>
+    request<{ test: { status: number; preview: string } }>(`/api/custom-tools/${id}`, { method: "POST" }),
 };

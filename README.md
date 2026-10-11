@@ -26,7 +26,7 @@ format. Requests go through your own server, so keys never reach the browser.
 | **M6** | Tool calling, web search, fetch, calculator, CSV analysis, citations | ✅ Shipped |
 | **M7** | Thinking display, context meter, cost tracking, fallback + retry | ✅ Shipped |
 | **M8** | Projects, RAG, memory, styles, preferences, slash commands | ✅ Shipped |
-| M9 | MCP client, custom tools, Deep Research | ⏳ Planned |
+| **M9** | MCP client, custom tools, Deep Research | ✅ Shipped |
 | M10 | Voice, accessibility, PWA, shortcuts, mobile polish | ⏳ Planned |
 | M11 | Multi-user auth, sharing, usage dashboard, Docker, tests | ⏳ Partial (Docker, single-user mode) |
 
@@ -83,6 +83,18 @@ What works today:
   leave one on Default and the chat model handles it.
 - **Profile and preferences** (name, role, "how should the AI respond") are layered onto every chat's
   system prompt.
+- **MCP servers** (Settings → MCP servers) connect over Streamable HTTP or HTTP+SSE with optional
+  encrypted headers. Conduit lists each server's tools, resources, and prompts; tools appear in the
+  composer's tools menu, are enabled per chat, and can require an approval click before they run.
+  Resources and prompts can be read straight into the composer.
+- **Custom tools** are HTTP endpoints you describe with a JSON schema and optional encrypted
+  headers. GET arguments become a query string, POST arguments become a JSON body, and a Test
+  button runs the stored definition before a model ever sees it.
+- **Deep Research** (the compass toggle in the composer) plans search queries, runs them in
+  parallel, reads the pages it finds, and then writes a long cited report. A live timeline shows
+  every plan, search, and read, and the Stop button cancels the whole run. It needs a search
+  provider from Settings → Tools, and works with the `custom` provider so you can point it at your
+  own endpoint.
 - Light / dark / system themes and a user-selectable accent color.
 
 ## Screenshots

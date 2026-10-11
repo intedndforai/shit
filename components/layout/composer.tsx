@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ArrowUp, Paperclip, Square, Sparkles, X } from "lucide-react";
+import { ArrowUp, Compass, Paperclip, Square, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AttachmentChips } from "@/components/chat/attachments/attachment-chips";
@@ -42,22 +42,31 @@ export function Composer({
   const updateAttachment = useUIStore((state) => state.updateAttachment);
   const pendingModelId = useUIStore((state) => state.pendingModelId);
   const setPendingModelId = useUIStore((state) => state.setPendingModelId);
+  const researchMode = useUIStore((state) => state.researchMode);
+  const setResearchMode = useUIStore((state) => state.setResearchMode);
 
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = React.useState(false);
   const [prompts, setPrompts] = React.useState<PromptDto[]>([]);
   const [models, setModels] = React.useState<ModelOptionDto[]>([]);
-  const [highlight, setHighlight] = React.useState(0);
-
-  const readyCount = attachments.filter((attachment) => attachment.status === "ready").length;
-  const uploading = attachments.some((attachment) => attachment.status === "uploading");
-  const canSend = Boolean(draft.trim() || readyCount) && !uploading && !streaming && !disabled;
-
   // "/command" opens the saved-prompt menu; a bare "@" token switches model.
   const commandQuery = /^\/([a-z0-9-]*)$/i.exec(draft.trim())?.[1]?.toLowerCase() ?? null;
   const modelQuery = /(?:^|\s)@([a-z0-9._:-]*)$/i.exec(draft)?.[1]?.toLowerCase() ?? null;
   const menu: "command" | "model" | null = commandQuery !== null ? "command" : modelQuery !== null ? "model" : null;
+
+  /** Highlight resets whenever the menu or the query changes, without an effect. */
+  const highlightKey = `${menu ?? ""}:${commandQuery ?? ""}:${modelQuery ?? ""}`;
+  const [highlightState, setHighlightState] = React.useState({ key: "", index: 0 });
+  const highlight = highlightState.key === highlightKey ? highlightState.index : 0;
+  const setHighlight = (next: number | ((current: number) => number)) =>
+    setHighlightState((current) => ({
+      key: highlightKey,
+      index: typeof next === "function" ? next(current.key === highlightKey ? current.index : 0) : next,
+    }));
+  const readyCount = attachments.filter((attachment) => attachment.status === "ready").length;
+  const uploading = attachments.some((attachment) => attachment.status === "uploading");
+  const canSend = Boolean(draft.trim() || readyCount) && !uploading && !streaming && !disabled;
 
   const commandMatches = React.useMemo(
     () =>
@@ -78,10 +87,6 @@ export function Composer({
       })
       .slice(0, 6);
   }, [modelQuery, models]);
-
-  React.useEffect(() => {
-    setHighlight(0);
-  }, [menu, draft, commandMatches.length, modelMatches.length]);
 
   // Prompts are tiny; load them once. Models are only needed when "@" is typed.
   React.useEffect(() => {
@@ -342,6 +347,39 @@ export function Composer({
           <ToolsMenu />
 
           <ChatControls />
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={researchMode ? "accent" : "ghost"}
+                size="icon-sm"
+                aria-pressed={researchMode}
+                aria-label="Deep Research"
+                onClick={() => setResearchMode(!researchMode)}
+              >
+                <Compass className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              Deep Research plans searches, reads the pages it finds, then writes a cited report. Needs a search
+              provider in Settings → Tools.
+            </TooltipContent>
+          </Tooltip>
+
+          {researchMode ? (
+            <span className="flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-[11px]">
+              <Compass className="size-3 text-accent" />
+              <span>Deep Research</span>
+              <button
+                type="button"
+                aria-label="Turn off Deep Research"
+                onClick={() => setResearchMode(false)}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="size-3" />
+              </button>
+            </span>
+          ) : null}
 
           {pendingModelId ? (
             <span className="flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-[11px]">

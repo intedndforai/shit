@@ -22,6 +22,8 @@ const createSchema = z.object({
   projectId: z.string().nullable().optional(),
   styleId: z.string().nullable().optional(),
   incognito: z.boolean().optional(),
+  /** Per-chat tool selection; null means "use the registry defaults". */
+  toolsEnabled: z.array(z.string()).nullable().optional(),
 });
 
 export async function POST(request: Request) {
@@ -38,6 +40,7 @@ export async function POST(request: Request) {
       projectId: parsed.data.projectId ?? null,
       styleId: parsed.data.styleId ?? null,
       incognito: parsed.data.incognito ?? false,
+      toolsEnabled: parsed.data.toolsEnabled ?? null,
     });
     return jsonOk({ chat }, 201);
   } catch (error) {

@@ -83,7 +83,14 @@ export function ToolsMenu() {
               onSelect={(event) => event.preventDefault()}
             >
               <span className="flex flex-col gap-0.5">
-                <span className="text-sm">{spec.label}</span>
+                <span className="flex items-center gap-1.5 text-sm">
+                  {spec.label}
+                  {spec.source !== "builtin" ? (
+                    <span className="rounded bg-secondary px-1 text-[10px] uppercase text-muted-foreground">
+                      {spec.source === "mcp" ? (spec.server ?? "MCP") : "custom"}
+                    </span>
+                  ) : null}
+                </span>
                 <span className="line-clamp-2 text-[11px] text-muted-foreground">{spec.description}</span>
               </span>
             </DropdownMenuCheckboxItem>

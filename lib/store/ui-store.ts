@@ -36,6 +36,8 @@ export interface ToolRunState {
   label: string;
   input: unknown;
   requiresApproval: boolean;
+  /** "server" tools only need a decision; "client" tools run in the browser. */
+  execution: "server" | "client";
   status: "approval" | "running" | "done" | "error" | "denied";
   stdout: string;
   stderr: string;
@@ -65,6 +67,8 @@ interface UIState {
   toolRuns: Record<string, ToolRunState>;
   /** Model chosen with an @-mention; applied to the next turn. */
   pendingModelId: string | null;
+  /** Deep Research toggle in the composer; applied to the next turn. */
+  researchMode: boolean;
   /* Actions */
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
@@ -80,6 +84,7 @@ interface UIState {
   clearAttachments: () => void;
   setPendingTools: (tools: string[] | null) => void;
   setPendingModelId: (modelId: string | null) => void;
+  setResearchMode: (on: boolean) => void;
   startToolRun: (run: ToolRunState) => void;
   patchToolRun: (id: string, patch: Partial<ToolRunState>) => void;
   removeToolRun: (id: string) => void;
@@ -99,6 +104,7 @@ export const useUIStore = create<UIState>()(
       pendingTools: null,
       toolRuns: {},
       pendingModelId: null,
+      researchMode: false,
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       setMobileNavOpen: (mobileNavOpen) => set({ mobileNavOpen }),
@@ -119,6 +125,7 @@ export const useUIStore = create<UIState>()(
       clearAttachments: () => set({ attachments: [] }),
       setPendingTools: (pendingTools) => set({ pendingTools }),
       setPendingModelId: (pendingModelId) => set({ pendingModelId }),
+      setResearchMode: (researchMode) => set({ researchMode }),
       startToolRun: (run) => set((state) => ({ toolRuns: { ...state.toolRuns, [run.id]: run } })),
       patchToolRun: (id, patch) =>
         set((state) => {

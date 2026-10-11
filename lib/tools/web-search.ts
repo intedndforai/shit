@@ -7,7 +7,7 @@ import { decryptText } from "@/lib/crypto";
  * encrypted.
  */
 
-export const SEARCH_PROVIDERS = ["tavily", "brave", "serper", "searxng"] as const;
+export const SEARCH_PROVIDERS = ["tavily", "brave", "serper", "searxng", "custom"] as const;
 export type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
 
 export interface ToolsConfig {
@@ -17,6 +17,8 @@ export interface ToolsConfig {
     /** Optional base URL for self-hosted SearXNG. */
     baseUrl?: string;
     maxResults: number;
+    /** For `custom`: the endpoint to GET. `{query}` is substituted when present. */
+    endpoint?: string;
   };
   fetch: { enabled: boolean };
   /** Browser-side code runners (Python/JavaScript) ask before running by default. */
@@ -119,7 +121,7 @@ export async function webSearch(query: string): Promise<SearchResult[]> {
   if (!config.enabled) {
     throw new SearchNotConfiguredError("Web search is turned off. Enable it in Settings → Tools.");
   }
-  if (config.provider !== "searxng" && !apiKey) {
+  if (config.provider !== "searxng" && config.provider !== "custom" && !apiKey) {
     throw new SearchNotConfiguredError(
       `No ${config.provider} API key is saved. Add one in Settings → Tools to let the model search the web.`
     );
@@ -146,6 +148,21 @@ export async function webSearch(query: string): Promise<SearchResult[]> {
       { q: query, num: limit },
       { "x-api-key": apiKey ?? "" }
     )) as SearchPayload;
+    return firstResults(payload, limit);
+  }
+
+  if (config.provider === "custom") {
+    const endpoint = (config.endpoint ?? config.baseUrl ?? "").trim();
+    if (!endpoint) {
+      throw new SearchNotConfiguredError("Add the search endpoint URL in Settings → Tools.");
+    }
+    const url = endpoint.includes("{query}")
+      ? endpoint.replace(/\{query\}/g, encodeURIComponent(query))
+      : `${endpoint}${endpoint.includes("?") ? "&" : "?"}q=${encodeURIComponent(query)}`;
+    const headers: Record<string, string> = { accept: "application/json" };
+    if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+    const payload = (await getJson(url, headers)) as SearchPayload | RawResult[];
+    if (Array.isArray(payload)) return firstResults({ results: payload }, limit);
     return firstResults(payload, limit);
   }
 

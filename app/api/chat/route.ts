@@ -33,6 +33,12 @@ import {
   stripMemoryTags,
 } from "@/lib/server/memory";
 import { profileInstructions } from "@/lib/server/profile";
+import {
+  buildResearchContext,
+  gatherResearchSources,
+  planResearchQueries,
+  type ResearchStep,
+} from "@/lib/server/research";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -67,6 +73,8 @@ const bodySchema = z.object({
   continueFromLeaf: z.boolean().optional(),
   /** Per-chat tool selection; null means "use the registry defaults". */
   toolsEnabled: z.array(z.string()).nullable().optional(),
+  /** Deep Research: plan, search, fetch, then answer with citations. */
+  research: z.boolean().optional(),
   /**
    * Transcript sent by the client. Only used for incognito chats, which never
    * touch the database, so their context lives in the tab that owns them.
@@ -128,6 +136,11 @@ type OutgoingEvent =
       sources: Array<{ title: string; snippet: string }>;
     }
   | { type: "memory"; fact: string }
+  | { type: "research_step"; id: string; label: string; status: string; detail?: string }
+  | {
+      type: "research_sources";
+      sources: Array<{ title: string; url: string; snippet: string }>;
+    }
   | { type: "tool_status"; id: string; name: string; status: "running" | "success" | "error" }
   | {
       type: "tool_approval";
@@ -136,6 +149,8 @@ type OutgoingEvent =
       label: string;
       input: unknown;
       requiresApproval: boolean;
+      /** Server tools ask for a decision; client tools run in the browser. */
+      execution: "server" | "client";
     }
   | {
       type: "tool_result";
@@ -397,6 +412,67 @@ export async function POST(request: Request) {
       send({ type: "chat", chatId, title: initialTitle });
       send({ type: "message_ids", assistantMessageId: assistantRow.id });
 
+      // Deep Research: plan, search, fetch, then let the model write the report
+      // from the numbered excerpts. The Stop button cancels every phase.
+      if (body.research) {
+        const step = (update: ResearchStep) => {
+          if (!ac.signal.aborted) send({ type: "research_step", ...update });
+        };
+
+        if (!readToolsConfig().webSearch.enabled) {
+          step({
+            id: "plan",
+            label: "Deep Research needs a search provider",
+            status: "error",
+            detail: "Turn on web search in Settings → Tools, then try again.",
+          });
+        } else {
+          try {
+            step({ id: "plan", label: "Planning the research", status: "running" });
+            const queries = await planResearchQueries({
+              question: lastUserText || "the user question",
+              provider,
+              model: model.externalId,
+              signal: ac.signal,
+            });
+            step({
+              id: "plan",
+              label: "Planned the research",
+              status: "done",
+              detail: queries.map((query) => `“${query}”`).join(", "),
+            });
+
+            const sources = await gatherResearchSources({ queries, signal: ac.signal, onStep: step });
+
+            if (sources.length) {
+              systemPrompt += `\n\n${buildResearchContext(lastUserText, sources)}`;
+              send({
+                type: "research_sources",
+                sources: sources.map((source) => ({
+                  title: source.title,
+                  url: source.url,
+                  snippet: source.excerpt.slice(0, 300),
+                })),
+              });
+              step({
+                id: "gather",
+                label: `Gathered ${sources.length} source${sources.length === 1 ? "" : "s"}`,
+                status: "done",
+              });
+            } else {
+              step({ id: "gather", label: "No sources could be gathered", status: "error" });
+            }
+          } catch (error) {
+            step({
+              id: "gather",
+              label: "Research stopped",
+              status: "error",
+              detail: error instanceof Error ? error.message : "the research step failed",
+            });
+          }
+        }
+      }
+
       try {
         let round = 0;
 
@@ -524,6 +600,7 @@ export async function POST(request: Request) {
                 label: spec.label,
                 input: call.input,
                 requiresApproval: spec.requiresApproval !== false && !readToolsConfig().code.autoApprove,
+                execution: "client",
               });
 
               const outcome = await waitForClientTool(id, { signal: ac.signal });
@@ -541,6 +618,37 @@ export async function POST(request: Request) {
               } else {
                 markUse(id, outcome.isError ? "error" : "success", outcome.isError ? outcome.output : undefined);
                 result = { output: outcome.output, isError: outcome.isError };
+              }
+            } else if (spec?.requiresApproval && !readToolsConfig().code.autoApprove) {
+              // A server-side tool the user asked to approve first (MCP servers
+              // and custom HTTP tools can opt in). The page answers through the
+              // same /api/chat/tool-result endpoint the code runners use.
+              markUse(id, "awaiting_approval");
+              send({
+                type: "tool_approval",
+                id,
+                name: call.name,
+                label: spec.label,
+                input: call.input,
+                requiresApproval: true,
+                execution: "server",
+              });
+
+              const decision = await waitForClientTool(id, { signal: ac.signal });
+              if (decision.status === "cancelled") {
+                stopped = true;
+                break;
+              }
+              if (decision.status === "denied") {
+                markUse(id, "denied", "Declined by the user.");
+                result = { output: "The user declined to run this tool. Continue without its result.", isError: true };
+              } else if (decision.status === "timeout") {
+                markUse(id, "error", "Timed out waiting for the user.");
+                result = { output: "The tool timed out before it ran.", isError: true };
+              } else {
+                send({ type: "tool_status", id, name: call.name, status: "running" });
+                result = await runTool(call.name, call.input);
+                markUse(id, result.isError ? "error" : "success", result.isError ? result.output : undefined);
               }
             } else {
               send({ type: "tool_status", id, name: call.name, status: "running" });

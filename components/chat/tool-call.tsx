@@ -4,6 +4,7 @@ import * as React from "react";
 import { Check, ChevronRight, Loader2, Play, ShieldCheck, TriangleAlert, Wrench, X } from "lucide-react";
 import type { ContentPart } from "@/lib/db/schema";
 import { denyToolInBrowser, runToolInBrowser } from "@/lib/client/code-tools";
+import { api } from "@/lib/api-client";
 import { useUIStore } from "@/lib/store/ui-store";
 import { cn } from "@/lib/utils";
 
@@ -61,6 +62,7 @@ function CodeRunPanel({ call }: { call: ToolUsePart }) {
       label: humanise(call.name),
       input: call.input,
       requiresApproval: true,
+      execution: "client",
       status: "approval",
       stdout: "",
       stderr: "",
@@ -190,6 +192,66 @@ function CodeRunPanel({ call }: { call: ToolUsePart }) {
   );
 }
 
+/**
+ * Approval prompt for a tool that runs on the server (an MCP server or a custom
+ * HTTP tool). Approving posts the decision; the chat stream then runs it.
+ */
+function ServerApprovalPanel({ call }: { call: ToolUsePart }) {
+  const run = useUIStore((state) => state.toolRuns[call.id]);
+  const patchToolRun = useUIStore((state) => state.patchToolRun);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const decide = async (decision: "run" | "deny") => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.postToolResult({ id: call.id, decision });
+      patchToolRun(call.id, { status: decision === "run" ? "running" : "denied" });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not record your decision.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-accent/40 bg-accent/5 px-3 py-2 text-xs">
+      <div className="flex items-center gap-2">
+        <ShieldCheck className="size-3.5 shrink-0 text-accent" />
+        <span className="font-medium">Run {run?.label ?? humanise(call.name)}?</span>
+        <span className="min-w-0 flex-1 truncate text-muted-foreground">Runs on the server with your saved settings.</span>
+      </div>
+      {summariseInput(call.input) ? (
+        <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-secondary/60 p-2 text-[11px]">
+          {JSON.stringify(call.input ?? {}, null, 2)}
+        </pre>
+      ) : null}
+      <div className="mt-2 flex gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void decide("run")}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1 font-medium text-accent-foreground hover:opacity-90 disabled:opacity-60"
+        >
+          <Play className="size-3" />
+          Run
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void decide("deny")}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-muted-foreground hover:bg-secondary disabled:opacity-60"
+        >
+          <X className="size-3" />
+          Skip
+        </button>
+      </div>
+      {error ? <p className="mt-1.5 text-[11px] text-destructive">{error}</p> : null}
+    </div>
+  );
+}
+
 /** Collapsible cards for the tool calls a model made while answering. */
 export function ToolCallList({ content }: { content: ContentPart[] }) {
   const calls = content.filter((part): part is ToolUsePart => part.kind === "tool_use");
@@ -207,6 +269,10 @@ export function ToolCallList({ content }: { content: ContentPart[] }) {
 
         if (CLIENT_TOOLS.has(call.name)) {
           return <CodeRunPanel key={call.id} call={{ ...call, status }} />;
+        }
+
+        if (status === "awaiting_approval") {
+          return <ServerApprovalPanel key={call.id} call={{ ...call, status }} />;
         }
 
         return (

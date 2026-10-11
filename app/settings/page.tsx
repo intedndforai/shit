@@ -4,6 +4,8 @@ import { AccentPicker } from "@/components/accent-picker";
 import { PageShell } from "@/components/layout/page-shell";
 import { ProviderManager } from "@/components/settings/provider-manager";
 import { ToolsManager } from "@/components/settings/tools-manager";
+import { CustomToolsManager } from "@/components/settings/custom-tools";
+import { McpServersManager } from "@/components/settings/mcp-servers";
 import { MemoryManager } from "@/components/settings/memory-manager";
 import { ModelRolesManager } from "@/components/settings/model-roles";
 import { PresetsManager } from "@/components/settings/presets-manager";
@@ -67,6 +69,10 @@ export default function SettingsPage() {
       <PromptsManager />
 
       <ToolsManager />
+
+      <McpServersManager />
+
+      <CustomToolsManager />
 
       <ModelRolesManager />
 

@@ -211,6 +211,48 @@ Response styles and saved prompts are plain rows (`response_styles`, `saved_prom
 built-ins; styles are appended to the system prompt per chat, and prompts are expanded client-side by
 the composer's `/` menu.
 
+## MCP, custom tools, and Deep Research (M9)
+
+Conduit is an MCP **client**. `lib/mcp/client.ts` speaks JSON-RPC 2.0 to servers the user adds in
+Settings: Streamable HTTP (one POST endpoint, `mcp-session-id` echoed back when the server sends one)
+or the legacy HTTP+SSE transport (open the event stream, learn the message endpoint, then POST).
+Each server is stored in `app_settings` with its headers encrypted as `iv:ciphertext` pairs, and the
+capabilities it reports are cached alongside it:
+
+| Phase | What happens |
+| --- | --- |
+| Add or Refresh | `initialize` → `notifications/initialized` → `tools/list` → `resources/list` → `prompts/list` |
+| Tools | Every tool is exposed to the model as `mcp__<server>__<tool>_<hash>`, a name that matches provider constraints and stays stable |
+| Calls | `tools/call` runs on the server; text content comes back to the model, the transcript keeps the call card |
+| Resources and prompts | Listed in Settings; `resources/read` and `prompts/get` can drop their text into the composer |
+
+Custom tools (`lib/tools/custom.ts`) are the same idea without a protocol: a label, a description, a
+method, a URL, a JSON Schema, and optional encrypted headers. GET arguments become a query string,
+POST arguments become a JSON body, and responses are capped at 20,000 characters. Both cuts of tool
+join the built-in ones in `lib/tools/registry.ts`, so the tools menu, the per-chat `toolsEnabled`
+list, and the chat route's tool loop need no special cases.
+
+Two deliberate differences from the `fetch_url` tool: MCP servers and custom tools **may** point at
+loopback or private addresses, because connecting to a local MCP server or an internal API is the
+point, and the URL is explicit user configuration. Requests still carry timeouts, follow a bounded
+number of redirects, and cap response size. Approval is per server or per tool: when it is on, the
+route parks the call, streams a `tool_approval` event with `execution: "server"`, and waits for the
+page to post a decision through the same `/api/chat/tool-result` endpoint the code runners use.
+
+Deep Research (`lib/server/research.ts`) runs before the answering turn and reuses the search and
+fetch tools:
+
+1. **Plan** — a short completion turns the question into up to five search queries.
+2. **Gather** — queries run in parallel (three at a time), then the top pages per query are fetched in
+   parallel. A page that cannot be read keeps its search snippet instead of vanishing.
+3. **Answer** — the numbered excerpts are appended to the system prompt and the model writes the
+   report, citing `[1]`, `[2]`, and so on.
+
+Progress streams as `research_step` events (rendered as a timeline) and the source list arrives as a
+`research_sources` event, so the transcript shows the plan, the searches, the reads, and the
+citations. Every network call takes the request's abort signal, which is what makes the Stop button
+cancel the whole run; the client also carries the steps and sources onto the reconciled answer the
+same way it carries project excerpts.
 ## Provider contract
 
 ```ts

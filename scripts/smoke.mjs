@@ -37,6 +37,11 @@ async function jsonFetch(path, init) {
 const health = await jsonFetch("/api/health");
 check("health endpoint responds", health.status === 200, `database reachable: ${health.body?.database?.reachable}`);
 
+// The tool checks below assert that web search starts out unconfigured, so park
+// whatever the database already has and put it back at the end of the run.
+const originalToolsConfig = (await jsonFetch("/api/tools")).body?.config ?? null;
+await jsonFetch("/api/tools", { method: "PATCH", body: JSON.stringify({ webSearch: { enabled: false } }) });
+
 // 2. Create provider
 const created = await jsonFetch("/api/providers", {
   method: "POST",
@@ -799,6 +804,14 @@ const flakyModels = await jsonFetch(`/api/providers/${flakyProviderId}/models`, 
 });
 const flakyModelId = flakyModels.body?.models?.[0]?.id;
 
+// A model flagged as the fallback elsewhere in the database would win over the
+// one this run picks, so park those flags and put them back at the end.
+const allModels = await jsonFetch("/api/models");
+const parkedFallbacks = (allModels.body?.models ?? []).filter((model) => model.isFallback);
+for (const model of parkedFallbacks) {
+  await jsonFetch(`/api/models/${model.id}`, { method: "PATCH", body: JSON.stringify({ isFallback: false }) });
+}
+
 await jsonFetch(`/api/models/${fallbackModelId}`, {
   method: "PATCH",
   body: JSON.stringify({ isFallback: true }),
@@ -847,6 +860,9 @@ await jsonFetch(`/api/models/${fallbackModelId}`, {
   method: "PATCH",
   body: JSON.stringify({ isFallback: false }),
 });
+for (const model of parkedFallbacks) {
+  await jsonFetch(`/api/models/${model.id}`, { method: "PATCH", body: JSON.stringify({ isFallback: true }) });
+}
 await jsonFetch(`/api/providers/${flakyProviderId}`, { method: "DELETE" });
 await new Promise((resolve) => flakyServer.close(resolve));
 
@@ -1228,6 +1244,195 @@ check(
 // Deleting a project removes its chats' scoping but keeps the chats.
 const deletedProject = await jsonFetch(`/api/projects/${keywordProjectId}`, { method: "DELETE" });
 check("a project can be deleted", deletedProject.status === 200);
+
+// --- Milestone 9: MCP client, custom tools, Deep Research ------------------
+
+const mockRoot = providerBaseUrl.replace(/\/v1\/?$/, "");
+
+// Clean slate, so these checks stay repeatable on a reused database.
+for (const server of (await jsonFetch("/api/mcp")).body?.servers ?? []) {
+  await jsonFetch(`/api/mcp/${server.id}`, { method: "DELETE" });
+}
+for (const tool of (await jsonFetch("/api/custom-tools")).body?.tools ?? []) {
+  await jsonFetch(`/api/custom-tools/${tool.id}`, { method: "DELETE" });
+}
+
+// Deep Research without a search provider must say so instead of failing silently.
+const researchOffChat = await jsonFetch("/api/chats", {
+  method: "POST",
+  body: JSON.stringify({ title: "Research without search" }),
+});
+const researchOffEvents = await streamEvents({
+  chatId: researchOffChat.body?.chat?.id,
+  message: "deep research on anything at all",
+  research: true,
+});
+const offStep = researchOffEvents.find((event) => event.type === "research_step" && event.status === "error");
+check("Deep Research explains that it needs a search provider", Boolean(offStep), offStep?.label);
+
+// The mock provider also serves a search endpoint, so research runs offline.
+const previousSearch = (await jsonFetch("/api/tools")).body?.config?.webSearch;
+const searchConfig = await jsonFetch("/api/tools", {
+  method: "PATCH",
+  body: JSON.stringify({
+    webSearch: { enabled: true, provider: "custom", endpoint: `${mockRoot}/search?q={query}`, maxResults: 3 },
+  }),
+});
+check(
+  "a custom search endpoint can be configured",
+  searchConfig.status === 200 && searchConfig.body?.config?.webSearch?.provider === "custom",
+  searchConfig.body?.config?.webSearch?.endpoint
+);
+
+// MCP: add the mock server, then read what it offers.
+const mcpAdded = await jsonFetch("/api/mcp", {
+  method: "POST",
+  body: JSON.stringify({
+    name: "Mock MCP",
+    url: `${mockRoot}/mcp`,
+    transport: "http",
+    headers: [{ name: "X-Smoke-Token", value: "mcp-secret-value", secret: true }],
+  }),
+});
+const mcpId = mcpAdded.body?.serverId;
+check("an MCP server can be added", mcpAdded.status === 201 && Boolean(mcpId), mcpAdded.body?.syncError ?? mcpId);
+check("adding an MCP server syncs its capabilities", mcpAdded.body?.synced === true, String(mcpAdded.body?.syncError ?? ""));
+
+const mcpServer = (mcpAdded.body?.servers ?? []).find((server) => server.id === mcpId);
+check(
+  "tools, resources, and prompts are listed",
+  mcpServer?.toolCount === 1 && mcpServer?.resourceCount === 1 && mcpServer?.promptCount === 1,
+  JSON.stringify({ tools: mcpServer?.toolCount, resources: mcpServer?.resourceCount, prompts: mcpServer?.promptCount })
+);
+check("the handshake reports the server name", String(mcpServer?.serverInfo ?? "").includes("mock-mcp"), mcpServer?.serverInfo);
+check(
+  "MCP header secrets are stored masked",
+  mcpServer?.headers?.[0]?.masked !== "mcp-secret-value" && !JSON.stringify(mcpAdded.body).includes("mcp-secret-value"),
+  mcpServer?.headers?.[0]?.masked
+);
+
+const mcpDetail = await jsonFetch(`/api/mcp/${mcpId}`);
+const mcpTool = mcpDetail.body?.cache?.tools?.[0];
+check(
+  "MCP tools get a provider-safe name",
+  /^[a-zA-Z0-9_-]{1,64}$/.test(mcpTool?.exposed ?? "") && String(mcpTool?.exposed).startsWith("mcp__"),
+  mcpTool?.exposed
+);
+
+const mcpCatalog = await jsonFetch("/api/tools");
+const mcpSpec = (mcpCatalog.body?.specs ?? []).find((spec) => spec.name === mcpTool?.exposed);
+check("the MCP tool shows up in the tools menu", mcpSpec?.source === "mcp" && mcpSpec?.configured === true, mcpSpec?.label);
+
+const mcpChat = await jsonFetch("/api/chats", {
+  method: "POST",
+  body: JSON.stringify({ title: "MCP chat", toolsEnabled: [mcpTool?.exposed] }),
+});
+const mcpEvents = await streamEvents({ chatId: mcpChat.body?.chat?.id, message: "mcp-echo please" });
+check(
+  "the model can call an MCP tool",
+  eventsText(mcpEvents).includes("mock-mcp echoes: hello from smoke"),
+  eventsText(mcpEvents).slice(0, 80)
+);
+
+const resourceRead = await jsonFetch(`/api/mcp/${mcpId}`, {
+  method: "POST",
+  body: JSON.stringify({ action: "resource", uri: "mock://welcome" }),
+});
+check("an MCP resource can be read", resourceRead.status === 200 && String(resourceRead.body?.text).includes("mock MCP server"));
+
+const promptRead = await jsonFetch(`/api/mcp/${mcpId}`, {
+  method: "POST",
+  body: JSON.stringify({ action: "prompt", name: "mock_summary", args: { topic: "Conduit" } }),
+});
+check("an MCP prompt can be rendered", promptRead.status === 200 && String(promptRead.body?.text).includes("Summarise Conduit"));
+
+const mcpRefreshed = await jsonFetch(`/api/mcp/${mcpId}`, { method: "POST", body: JSON.stringify({ action: "refresh" }) });
+check("an MCP server can be refreshed on demand", mcpRefreshed.status === 200 && mcpRefreshed.body?.cache?.toolCount === 1);
+
+// Custom HTTP tools: a GET tool pointed at the mock search endpoint.
+const custom = await jsonFetch("/api/custom-tools", {
+  method: "POST",
+  body: JSON.stringify({
+    label: "Mock lookup",
+    description: "Look something up in the mock search backend.",
+    method: "GET",
+    url: `${mockRoot}/search`,
+    parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+  }),
+});
+const customTool = custom.body?.tool;
+check("a custom HTTP tool can be defined", custom.status === 201 && Boolean(customTool?.id), custom.body?.error ?? customTool?.exposed);
+check("the custom tool has a provider-safe name", /^custom__[a-z0-9_]+$/.test(customTool?.exposed ?? ""), customTool?.exposed);
+
+const customTest = await jsonFetch(`/api/custom-tools/${customTool?.id}`, { method: "POST" });
+check("a custom tool can be tested", customTest.status === 200 && customTest.body?.test?.status === 200, `HTTP ${customTest.body?.test?.status}`);
+
+const customChat = await jsonFetch("/api/chats", {
+  method: "POST",
+  body: JSON.stringify({ title: "Custom tool chat", toolsEnabled: [customTool?.exposed] }),
+});
+const customEvents = await streamEvents({ chatId: customChat.body?.chat?.id, message: "custom-tool-call please" });
+check(
+  "the model can call a custom tool",
+  eventsText(customEvents).includes("Mock research page one"),
+  eventsText(customEvents).slice(0, 80)
+);
+
+const customDisabled = await jsonFetch(`/api/custom-tools/${customTool?.id}`, {
+  method: "PATCH",
+  body: JSON.stringify({ enabled: false }),
+});
+check("a custom tool can be switched off", customDisabled.body?.tool?.enabled === false);
+const afterDisable = await jsonFetch("/api/tools");
+check(
+  "a disabled custom tool leaves the catalogue",
+  !(afterDisable.body?.specs ?? []).some((spec) => spec.name === customTool?.exposed)
+);
+
+// Deep Research end to end: plan, search, read, then a cited report.
+const researchChat = await jsonFetch("/api/chats", { method: "POST", body: JSON.stringify({ title: "Deep research" }) });
+const researchEvents = await streamEvents({
+  chatId: researchChat.body?.chat?.id,
+  message: "deep research on the conduit retrieval pipeline",
+  research: true,
+});
+const researchSteps = researchEvents.filter((event) => event.type === "research_step");
+check(
+  "Deep Research plans the research",
+  researchSteps.some((step) => step.label === "Planned the research"),
+  researchSteps.map((step) => step.label).slice(0, 3).join(" | ")
+);
+check(
+  "Deep Research runs the planned searches",
+  researchSteps.some((step) => step.status === "done" && step.label.startsWith("Searched")),
+  researchSteps.filter((step) => step.status === "done").length + " done steps"
+);
+check(
+  "Deep Research reports every read attempt",
+  researchSteps.some((step) => step.label.startsWith("Read ") || step.label.startsWith("Could not read ")),
+  researchSteps.map((step) => step.label).filter((label) => label.startsWith("Read") || label.startsWith("Could not")).join(" | ")
+);
+const researchSources = researchEvents.find((event) => event.type === "research_sources");
+check(
+  "Deep Research streams its numbered sources",
+  (researchSources?.sources?.length ?? 0) >= 2,
+  JSON.stringify(researchSources?.sources?.map((source) => source.url) ?? [])
+);
+check(
+  "the report cites the sources",
+  /\[1\]/.test(eventsText(researchEvents)) && eventsText(researchEvents).includes("Sources:"),
+  eventsText(researchEvents).slice(0, 80)
+);
+
+// Teardown: leave the database as it was found.
+if (originalToolsConfig?.webSearch) {
+  await jsonFetch("/api/tools", { method: "PATCH", body: JSON.stringify({ webSearch: originalToolsConfig.webSearch }) });
+}
+if (previousSearch) {
+  await jsonFetch("/api/tools", { method: "PATCH", body: JSON.stringify({ webSearch: previousSearch }) });
+}
+await jsonFetch(`/api/mcp/${mcpId}`, { method: "DELETE" });
+await jsonFetch(`/api/custom-tools/${customTool?.id}`, { method: "DELETE" });
 
 const failed = results.filter((result) => !result.ok);
 console.log(`\n${results.length - failed.length}/${results.length} checks passed`);

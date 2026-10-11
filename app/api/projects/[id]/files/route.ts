@@ -60,8 +60,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
 }
 
-export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+export async function DELETE(request: Request, _context: { params: Promise<{ id: string }> }) {
   const fileId = new URL(request.url).searchParams.get("fileId");
   if (!fileId) return jsonError("A fileId query parameter is required.", 400);
   try {

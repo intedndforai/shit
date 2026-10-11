@@ -82,8 +82,28 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   }, [projectId]);
 
   React.useEffect(() => {
-    void load();
-  }, [load]);
+    let cancelled = false;
+    api
+      .getProject(projectId)
+      .then((data) => {
+        if (cancelled) return;
+        setState(data);
+        setDraft({
+          name: data.project.name,
+          description: data.project.description ?? "",
+          instructions: data.project.instructions ?? "",
+        });
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) setError(cause instanceof Error ? cause.message : "Could not load this project.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
 
   const saveDetails = async () => {
     if (!draft.name.trim()) {

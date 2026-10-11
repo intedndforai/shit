@@ -109,6 +109,7 @@ export function ToolsManager() {
               <option value="brave">Brave Search</option>
               <option value="serper">Serper (Google)</option>
               <option value="searxng">SearXNG (self-hosted)</option>
+              <option value="custom">Custom endpoint</option>
             </select>
           </div>
 
@@ -123,6 +124,22 @@ export function ToolsManager() {
               onChange={(event) => setApiKey(event.target.value)}
             />
           </div>
+
+          {webSearch.provider === "custom" ? (
+            <div className="flex flex-col gap-1.5 sm:col-span-2">
+              <Label htmlFor="search-endpoint">Search endpoint</Label>
+              <Input
+                id="search-endpoint"
+                defaultValue={webSearch.endpoint ?? ""}
+                placeholder="https://search.example.com/api?q={query}"
+                onBlur={(event) => void save({ webSearch: { endpoint: event.target.value.trim() } })}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Conduit GETs this URL and reads a JSON list of results. Use {"{query}"} where the query belongs,
+                otherwise it is appended as ?q=.
+              </p>
+            </div>
+          ) : null}
 
           {webSearch.provider === "searxng" ? (
             <div className="flex flex-col gap-1.5 sm:col-span-2">
@@ -196,7 +213,9 @@ export function ToolsManager() {
         <div className="flex flex-col gap-2 border-t border-border pt-4">
           <p className="text-xs font-medium text-muted-foreground">Built-in tools</p>
           <ul className="flex flex-col gap-1.5">
-            {state.specs.map((spec) => (
+            {state.specs
+              .filter((spec) => spec.source === "builtin")
+              .map((spec) => (
               <li key={spec.name} className="flex items-start gap-2 text-xs">
                 <Badge variant={spec.configured ? "outline" : "warning"} className="mt-0.5 shrink-0">
                   {spec.configured ? (spec.execution === "client" ? "in-browser" : "ready") : "needs setup"}
@@ -206,7 +225,7 @@ export function ToolsManager() {
                   <span className="block text-muted-foreground">{spec.description}</span>
                 </span>
               </li>
-            ))}
+              ))}
           </ul>
         </div>
 

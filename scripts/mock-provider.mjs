@@ -161,6 +161,71 @@ function buildFrames(body) {
     };
   }
 
+  // MCP and custom tools: their names are generated, so call whichever tool the
+  // server advertised under the prefix the prompt asks about.
+  const toolNames = (body.tools ?? []).map((tool) => String(tool.function?.name ?? tool.name ?? ""));
+  if (hasTools && /mcp-echo/i.test(question)) {
+    const target = toolNames.find((name) => name.startsWith("mcp__"));
+    if (target) {
+      return {
+        frames: [
+          {
+            tool_calls: [
+              {
+                index: 0,
+                id: "call_mock_mcp",
+                function: { name: target, arguments: JSON.stringify({ text: "hello from smoke" }) },
+              },
+            ],
+          },
+        ],
+        text: "",
+        finishReason: "tool_calls",
+      };
+    }
+  }
+
+  if (hasTools && /custom-tool-call/i.test(question)) {
+    const target = toolNames.find((name) => name.startsWith("custom__"));
+    if (target) {
+      return {
+        frames: [
+          {
+            tool_calls: [
+              {
+                index: 0,
+                id: "call_mock_custom",
+                function: { name: target, arguments: JSON.stringify({ query: "conduit" }) },
+              },
+            ],
+          },
+        ],
+        text: "",
+        finishReason: "tool_calls",
+      };
+    }
+  }
+
+  // Deep Research: the server asks for a plan first, then for the report.
+  if (/You plan web research/i.test(systemText)) {
+    const text = JSON.stringify(["conduit deep research", "mock pipeline coverage"]);
+    return { frames: text.split(" ").map((word, index) => ({ content: (index === 0 ? "" : " ") + word })), text };
+  }
+
+  if (/You are writing a research report/i.test(systemText)) {
+    const numbered = (systemText.match(/^\[\d+\] /gm) ?? []).length;
+    const marks = [];
+    for (let index = 1; index <= Math.min(numbered, 3); index += 1) marks.push("[" + index + "]");
+    const text =
+      "Research report from the mock provider. The research pipeline gathered " +
+      numbered +
+      " sources; the first is [1] and the second is [2].\n\n" +
+      "Both sources agree on the mechanism and differ only in wording.\n\n" +
+      "Sources: " +
+      marks.join(" ");
+    return { frames: text.split(/(\s+)/).filter(Boolean).map((chunk) => ({ content: chunk })), text };
+  }
+
   // The server layers the profile, memory, and response style onto the system
   // prompt. These markers (only produced when the question says "marker-check")
   // prove each layer reached the model.
@@ -324,6 +389,130 @@ const server = createServer((req, res) => {
       // Node emits "close" on a fully-consumed request; use the response stream
       // to detect a client disconnect instead.
       res.on("close", () => clearInterval(timer));
+    });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/search") {
+    const query = url.searchParams.get("q") ?? "";
+    json(res, 200, {
+      query,
+      results: [
+        {
+          title: "Mock research page one",
+          url: "http://127.0.0.1:" + port + "/research/one",
+          content: "The mock search backend returns this snippet for every query it receives.",
+        },
+        {
+          title: "Mock research page two",
+          url: "http://127.0.0.1:" + port + "/research/two",
+          content: "A second deterministic result, so the timeline has more than one source to show.",
+        },
+        {
+          title: "Mock research page three",
+          url: "http://127.0.0.1:" + port + "/research/three",
+          content: "Third result: the planner asked for two queries, so this is the tail of the list.",
+        },
+      ],
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/mcp") {
+    let raw = "";
+    req.on("data", (chunk) => {
+      raw += chunk;
+    });
+    req.on("end", () => {
+      let body = {};
+      try {
+        body = JSON.parse(raw || "{}");
+      } catch {
+        json(res, 400, { error: { message: "Invalid JSON body." } });
+        return;
+      }
+
+      if (!body.id) {
+        res.writeHead(202, { "mcp-session-id": "mock-mcp-session" });
+        res.end();
+        return;
+      }
+
+      const ok = (result) => {
+        const payload = JSON.stringify({ jsonrpc: "2.0", id: body.id, result });
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(payload),
+          "mcp-session-id": "mock-mcp-session",
+        });
+        res.end(payload);
+      };
+
+      if (body.method === "initialize") {
+        ok({
+          protocolVersion: "2025-06-18",
+          capabilities: { tools: {}, resources: {}, prompts: {} },
+          serverInfo: { name: "mock-mcp", version: "1.0.0" },
+        });
+        return;
+      }
+
+      if (body.method === "tools/list") {
+        ok({
+          tools: [
+            {
+              name: "mock_echo",
+              description: "Echo a string back, prefixed with the server name.",
+              inputSchema: {
+                type: "object",
+                properties: { text: { type: "string", description: "The text to echo." } },
+                required: ["text"],
+              },
+            },
+          ],
+        });
+        return;
+      }
+
+      if (body.method === "tools/call") {
+        const args = body.params?.arguments ?? {};
+        ok({
+          content: [{ type: "text", text: "mock-mcp echoes: " + String(args.text ?? "") }],
+          isError: false,
+        });
+        return;
+      }
+
+      if (body.method === "resources/list") {
+        ok({ resources: [{ uri: "mock://welcome", name: "Welcome note", mimeType: "text/plain" }] });
+        return;
+      }
+
+      if (body.method === "resources/read") {
+        ok({ contents: [{ uri: "mock://welcome", mimeType: "text/plain", text: "Welcome to the mock MCP server." }] });
+        return;
+      }
+
+      if (body.method === "prompts/list") {
+        ok({
+          prompts: [
+            {
+              name: "mock_summary",
+              description: "Ask for a summary of a topic.",
+              arguments: [{ name: "topic", description: "What to summarise.", required: true }],
+            },
+          ],
+        });
+        return;
+      }
+
+      if (body.method === "prompts/get") {
+        const topic = body.params?.arguments?.topic ?? "anything";
+        ok({ messages: [{ role: "user", content: { type: "text", text: "Summarise " + topic + " in three bullets." } }] });
+        return;
+      }
+
+      ok({});
     });
     return;
   }

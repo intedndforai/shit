@@ -10,6 +10,7 @@ import { Blocks } from "lucide-react";
 import { parseArtifacts, stripArtifacts } from "@/lib/artifacts";
 import { splitMemoryTags } from "@/lib/memory-tags";
 import { SourceList } from "@/components/chat/sources-list";
+import { ResearchTimeline } from "@/components/chat/research-timeline";
 import { useUIStore } from "@/lib/store/ui-store";
 import { VersionSwitcher } from "@/components/chat/version-switcher";
 import { CitationList, ToolCallList } from "@/components/chat/tool-call";
@@ -250,6 +251,14 @@ export function MessageItem({
       <ToolCallList content={message.content} />
 
       {message.citations?.length ? <CitationList citations={message.citations} /> : null}
+
+      {message.researchSteps?.length || message.researchSources?.length ? (
+        <ResearchTimeline
+          steps={message.researchSteps ?? []}
+          sources={message.researchSources}
+          streaming={Boolean(message.streaming)}
+        />
+      ) : null}
 
       {message.sources?.length ? (
         <SourceList sources={message.sources} mode={message.sourceMode} />

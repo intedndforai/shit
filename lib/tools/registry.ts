@@ -5,6 +5,8 @@ import { FetchError, fetchUrl } from "./fetch-url";
 import { evaluateExpression, ExpressionError } from "./math";
 import { SearchNotConfiguredError, readToolsConfig, webSearch } from "./web-search";
 import { UnitError, convertUnits } from "./units";
+import { callMcpTool, enabledMcpTools, findToolByExposedName } from "@/lib/mcp/client";
+import { customToolsForModel, findCustomToolByExposed, runCustomTool } from "./custom";
 
 /**
  * Built-in tool registry.
@@ -140,18 +142,58 @@ export const TOOL_SPECS: ToolSpec[] = [
 
 export const DEFAULT_TOOL_NAMES = TOOL_SPECS.filter((tool) => tool.defaultEnabled).map((tool) => tool.name);
 
-/** Tools that are actually usable right now (search needs a configured key). */
+/**
+ * Tools that are usable right now: built-ins (search needs a key), the tools of
+ * enabled MCP servers, and the user's custom HTTP tools. MCP and custom tools
+ * are opt-in per chat, so they are not part of DEFAULT_TOOL_NAMES.
+ */
 export function availableToolNames(): string[] {
   const config = readToolsConfig();
-  return TOOL_SPECS.filter((tool) => {
+  const builtins = TOOL_SPECS.filter((tool) => {
     if (tool.name === "web_search") return config.webSearch.enabled;
     if (tool.name === "fetch_url") return config.fetch.enabled;
     return true;
   }).map((tool) => tool.name);
+
+  return [
+    ...builtins,
+    ...enabledMcpTools().map((entry) => entry.tool.exposed),
+    ...customToolsForModel().map((entry) => entry.tool.exposed),
+  ];
 }
 
+/** Spec for a built-in tool, or a synthetic one for an MCP/custom tool. */
 export function toolSpec(name: string): ToolSpec | undefined {
-  return TOOL_SPECS.find((spec) => spec.name === name);
+  const builtin = TOOL_SPECS.find((spec) => spec.name === name);
+  if (builtin) return builtin;
+
+  const mcp = enabledMcpTools().find((entry) => entry.tool.exposed === name);
+  if (mcp) {
+    return {
+      name,
+      label: `${mcp.tool.name} · ${mcp.server.name}`,
+      description: mcp.tool.description,
+      parameters: mcp.tool.inputSchema,
+      defaultEnabled: false,
+      execution: "server",
+      requiresApproval: mcp.server.requiresApproval,
+    };
+  }
+
+  const custom = customToolsForModel().find((entry) => entry.tool.exposed === name);
+  if (custom) {
+    return {
+      name,
+      label: custom.tool.label,
+      description: custom.tool.description,
+      parameters: custom.tool.parameters,
+      defaultEnabled: false,
+      execution: "server",
+      requiresApproval: custom.tool.requiresApproval,
+    };
+  }
+
+  return undefined;
 }
 
 export function resolveToolNames(requested?: string[]): string[] {
@@ -161,11 +203,93 @@ export function resolveToolNames(requested?: string[]): string[] {
 }
 
 export function toolDefinitions(names: string[]): ToolDefinition[] {
-  return TOOL_SPECS.filter((tool) => names.includes(tool.name)).map(({ name, description, parameters }) => ({
-    name,
-    description,
-    parameters,
+  const definitions: ToolDefinition[] = TOOL_SPECS.filter((tool) => names.includes(tool.name)).map(
+    ({ name, description, parameters }) => ({ name, description, parameters })
+  );
+
+  for (const entry of enabledMcpTools()) {
+    if (!names.includes(entry.tool.exposed)) continue;
+    definitions.push({
+      name: entry.tool.exposed,
+      description: `${entry.tool.description} (MCP server: ${entry.server.name})`,
+      parameters: entry.tool.inputSchema,
+    });
+  }
+
+  for (const entry of customToolsForModel()) {
+    if (!names.includes(entry.tool.exposed)) continue;
+    definitions.push({
+      name: entry.tool.exposed,
+      description: entry.tool.description,
+      parameters: entry.tool.parameters,
+    });
+  }
+
+  return definitions;
+}
+
+/** Everything the Settings and tools menus need, in one call. */
+export interface ToolPayload {
+  name: string;
+  label: string;
+  description: string;
+  defaultEnabled: boolean;
+  requiresConfig: boolean;
+  configured: boolean;
+  execution: "server" | "client";
+  requiresApproval: boolean;
+  parameters: Record<string, unknown>;
+  source: "builtin" | "mcp" | "custom";
+  server?: string;
+}
+
+export function toolPayloads(): ToolPayload[] {
+  const available = new Set(availableToolNames());
+  const payloads: ToolPayload[] = TOOL_SPECS.map((tool) => ({
+    name: tool.name,
+    label: tool.label,
+    description: tool.description ?? "",
+    defaultEnabled: Boolean(tool.defaultEnabled),
+    requiresConfig: Boolean(tool.requiresConfig),
+    configured: available.has(tool.name),
+    execution: tool.execution ?? "server",
+    requiresApproval: Boolean(tool.requiresApproval),
+    parameters: tool.parameters ?? {},
+    source: "builtin",
   }));
+
+  for (const entry of enabledMcpTools()) {
+    payloads.push({
+      name: entry.tool.exposed,
+      label: entry.tool.name,
+      description: entry.tool.description,
+      defaultEnabled: false,
+      requiresConfig: false,
+      configured: true,
+      execution: "server",
+      requiresApproval: entry.server.requiresApproval,
+      parameters: entry.tool.inputSchema,
+      source: "mcp",
+      server: entry.server.name,
+    });
+  }
+
+  for (const entry of customToolsForModel()) {
+    payloads.push({
+      name: entry.tool.exposed,
+      label: entry.tool.label,
+      description: entry.tool.description,
+      defaultEnabled: false,
+      requiresConfig: false,
+      configured: true,
+      execution: "server",
+      requiresApproval: entry.tool.requiresApproval,
+      parameters: entry.tool.parameters,
+      source: "custom",
+    });
+  }
+
+  return payloads;
 }
 
 export interface ToolCitation {
@@ -260,6 +384,24 @@ export async function runTool(name: string, input: unknown): Promise<ToolRunResu
       if (!csv) return { output: "Provide `csv` text or the `attachmentId` of a CSV you uploaded.", isError: true };
       const stats = analyseCsv(csv);
       return { output: clampOutput(JSON.stringify(stats, null, 2)), isError: false };
+    }
+
+    const mcp = findToolByExposedName(name);
+    if (mcp) {
+      try {
+        return { output: clampOutput(await callMcpTool(name, input)), isError: false };
+      } catch (error) {
+        return {
+          output: error instanceof Error ? error.message : "The MCP tool failed.",
+          isError: true,
+        };
+      }
+    }
+
+    const custom = findCustomToolByExposed(name);
+    if (custom) {
+      const result = await runCustomTool(custom, input);
+      return { output: clampOutput(result.output), isError: result.isError, citations: result.citations };
     }
 
     return { output: `Unknown tool: ${name}`, isError: true };

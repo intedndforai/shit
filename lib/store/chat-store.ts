@@ -25,6 +25,10 @@ export interface UiMessage {
   sourceMode?: "embeddings" | "keywords" | "none";
   /** Facts the model asked to remember while writing this answer. */
   memoryNotes?: string[];
+  /** Deep Research progress timeline for this answer. */
+  researchSteps?: Array<{ id: string; label: string; status: string; detail?: string }>;
+  /** Sources Deep Research gathered before the answer was written. */
+  researchSources?: Array<{ title: string; url: string; snippet: string }>;
 }
 
 interface ChatState {
@@ -228,6 +232,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       message: parts,
       toolsEnabled: useUIStore.getState().pendingTools,
       modelId: pendingModelId,
+      research: useUIStore.getState().researchMode || undefined,
       // Incognito chats are never written to the database, so the tab sends the
       // transcript it is showing to keep multi-turn context.
       history: incognito
@@ -395,6 +400,7 @@ async function runStream(
     continueFromLeaf?: boolean;
     toolsEnabled?: string[] | null;
     modelId?: string | null;
+    research?: boolean;
     history?: Array<{ role: "system" | "user" | "assistant" | "tool"; content: ContentPart[] }>;
   }
 ): Promise<void> {
@@ -441,6 +447,7 @@ async function runStream(
         continueFromLeaf: payload.continueFromLeaf,
         toolsEnabled: payload.toolsEnabled,
         modelId: payload.modelId ?? undefined,
+        research: payload.research,
         history: payload.history,
       }),
       signal: controller.signal,
@@ -607,6 +614,32 @@ function handleEvent(event: Record<string, unknown>, streamingId: string, set: S
     return;
   }
 
+  if (type === "research_step") {
+    const step = {
+      id: String(event.id ?? "step"),
+      label: String(event.label ?? "Researching"),
+      status: String(event.status ?? "running"),
+      detail: typeof event.detail === "string" ? event.detail : undefined,
+    };
+    update((message) => {
+      const steps = message.researchSteps ?? [];
+      const index = steps.findIndex((item) => item.id === step.id);
+      return {
+        ...message,
+        researchSteps: index < 0 ? [...steps, step] : steps.map((item) => (item.id === step.id ? step : item)),
+      };
+    });
+    return;
+  }
+
+  if (type === "research_sources") {
+    const sources = Array.isArray(event.sources)
+      ? (event.sources as Array<{ title: string; url: string; snippet: string }>)
+      : [];
+    update((message) => ({ ...message, researchSources: sources }));
+    return;
+  }
+
   if (type === "memory") {
     const fact = event.fact as string;
     if (fact) {
@@ -664,6 +697,7 @@ function handleEvent(event: Record<string, unknown>, streamingId: string, set: S
       label: (event.label as string) ?? name,
       input,
       requiresApproval: Boolean(event.requiresApproval),
+      execution: (event.execution as "server" | "client") ?? "client",
       status: "approval",
       stdout: "",
       stderr: "",
@@ -725,6 +759,8 @@ function carryLocalAnnotations(next: UiMessage[], local: UiMessage[]): UiMessage
       ...(source.sources?.length ? { sources: source.sources, sourceMode: source.sourceMode } : {}),
       ...(source.citations?.length ? { citations: source.citations } : {}),
       ...(source.memoryNotes?.length ? { memoryNotes: source.memoryNotes } : {}),
+      ...(source.researchSteps?.length ? { researchSteps: source.researchSteps } : {}),
+      ...(source.researchSources?.length ? { researchSources: source.researchSources } : {}),
     };
   });
 }

@@ -23,20 +23,23 @@ export function ProjectManager() {
   const [error, setError] = React.useState<string | null>(null);
   const [draft, setDraft] = React.useState({ name: "", description: "", instructions: "" });
 
-  const load = React.useCallback(async () => {
-    try {
-      const { projects: stored } = await api.listProjects();
-      setProjects(stored);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not load projects.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   React.useEffect(() => {
-    void load();
-  }, [load]);
+    let cancelled = false;
+    api
+      .listProjects()
+      .then(({ projects: stored }) => {
+        if (!cancelled) setProjects(stored);
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) setError(cause instanceof Error ? cause.message : "Could not load projects.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const create = async () => {
     const name = draft.name.trim();

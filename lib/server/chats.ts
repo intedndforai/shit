@@ -76,6 +76,7 @@ export function createChat(input: {
   projectId?: string | null;
   styleId?: string | null;
   incognito?: boolean;
+  toolsEnabled?: string[] | null;
 }): Chat {
   return getDb()
     .insert(chats)
@@ -87,6 +88,7 @@ export function createChat(input: {
       projectId: input.projectId ?? null,
       styleId: input.styleId ?? null,
       incognito: input.incognito ?? false,
+      toolsEnabled: input.toolsEnabled ?? null,
     })
     .returning()
     .get();

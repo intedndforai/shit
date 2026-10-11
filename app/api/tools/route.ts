@@ -2,7 +2,7 @@ import { z } from "zod";
 import { jsonOk, parseJson, errorResponse } from "@/lib/server/api";
 import { encryptText, maskSecret } from "@/lib/crypto";
 import { setSetting } from "@/lib/server/settings";
-import { TOOL_SPECS, availableToolNames, toolDefinitions } from "@/lib/tools/registry";
+import { availableToolNames, toolPayloads, type ToolPayload } from "@/lib/tools/registry";
 import { SEARCH_PROVIDERS, readSearchApiKey, readToolsConfig } from "@/lib/tools/web-search";
 
 export const runtime = "nodejs";
@@ -14,6 +14,7 @@ const configSchema = z.object({
       enabled: z.boolean().optional(),
       provider: z.enum(SEARCH_PROVIDERS).optional(),
       baseUrl: z.string().trim().max(300).optional(),
+      endpoint: z.string().trim().max(600).optional(),
       maxResults: z.number().int().min(1).max(10).optional(),
     })
     .optional(),
@@ -28,43 +29,19 @@ interface ToolsPayload {
   hasSearchApiKey: boolean;
   maskedSearchApiKey: string;
   available: string[];
-  specs: Array<{
-    name: string;
-    label: string;
-    description: string;
-    defaultEnabled: boolean;
-    requiresConfig: boolean;
-    configured: boolean;
-    execution: "server" | "client";
-    requiresApproval: boolean;
-    parameters: Record<string, unknown>;
-  }>;
+  specs: ToolPayload[];
 }
 
 function payload(): ToolsPayload {
   const config = readToolsConfig();
   const apiKey = readSearchApiKey();
-  const available = availableToolNames();
-  const definitions = new Map(
-    toolDefinitions(TOOL_SPECS.map((tool) => tool.name)).map((tool) => [tool.name, tool])
-  );
 
   return {
     config,
     hasSearchApiKey: Boolean(apiKey),
     maskedSearchApiKey: maskSecret(apiKey),
-    available,
-    specs: TOOL_SPECS.map((tool) => ({
-      name: tool.name,
-      label: tool.label,
-      description: tool.description ?? "",
-      defaultEnabled: tool.defaultEnabled,
-      requiresConfig: Boolean(tool.requiresConfig),
-      configured: available.includes(tool.name),
-      execution: tool.execution ?? "server",
-      requiresApproval: Boolean(tool.requiresApproval),
-      parameters: definitions.get(tool.name)?.parameters ?? {},
-    })),
+    available: availableToolNames(),
+    specs: toolPayloads(),
   };
 }
 
