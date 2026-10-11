@@ -12,6 +12,7 @@ import {
 } from "@/lib/server/chats";
 import { getActivePath, lastUserMessage, nextBranchIndex, setActiveLeaf } from "@/lib/server/branches";
 import { connectionFromProvider, findModel, getDefaultModel, getProvider } from "@/lib/server/providers";
+import { recordArtifacts } from "@/lib/server/artifacts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -237,6 +238,15 @@ export async function POST(request: Request) {
         );
 
         updateMessage(assistantRow.id, { content, tokenUsage: usage, cost, error: errored });
+
+        // Artifact blocks become versioned rows so the panel can diff them.
+        if (textParts.length) {
+          try {
+            recordArtifacts({ chatId, messageId: assistantRow.id, text: textParts.join("") });
+          } catch {
+            /* artifact capture is best-effort */
+          }
+        }
         recordUsage({
           providerId: provider.id,
           modelId: model.id,

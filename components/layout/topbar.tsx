@@ -13,6 +13,8 @@ import { useRouter } from "next/navigation";
 
 export function Topbar() {
   const setMobileNavOpen = useUIStore((state) => state.setMobileNavOpen);
+  const artifactsOpen = useUIStore((state) => state.artifactsOpen);
+  const toggleArtifacts = useUIStore((state) => state.toggleArtifacts);
   const router = useRouter();
 
   const chatId = useChatStore((state) => state.chatId);
@@ -110,14 +112,15 @@ export function Topbar() {
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label="Artifacts panel"
-              disabled
+              aria-label={artifactsOpen ? "Hide artifacts panel" : "Show artifacts panel"}
+              aria-pressed={artifactsOpen}
+              onClick={toggleArtifacts}
               className="hidden sm:inline-flex"
             >
               <PanelRight className="size-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Artifacts panel (Milestone 5)</TooltipContent>
+          <TooltipContent>Artifacts captured from this chat</TooltipContent>
         </Tooltip>
 
         <Tooltip>

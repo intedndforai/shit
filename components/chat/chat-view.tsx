@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Composer } from "@/components/layout/composer";
 import { EmptyState } from "@/components/layout/empty-state";
 import { MessageList } from "@/components/chat/message-list";
+import { ArtifactPanel } from "@/components/artifacts/artifact-panel";
 import { useChatStore } from "@/lib/store/chat-store";
 
 /** The conversation surface: empty state, transcript, composer, and errors. */
@@ -27,7 +28,8 @@ export function ChatView() {
   const needsProvider = Boolean(error && /no model is configured/i.test(error));
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0">
+      <div className="flex min-w-0 flex-1 flex-col">
       {messages.length === 0 && !loading ? (
         <div className="min-h-0 flex-1 overflow-y-auto">
           <EmptyState />
@@ -49,6 +51,8 @@ export function ChatView() {
       ) : null}
 
       <Composer onSend={send} onStop={stop} streaming={streaming} />
+      </div>
+      <ArtifactPanel />
     </div>
   );
 }

@@ -6,6 +6,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { MarkdownRenderer } from "@/components/markdown/markdown-renderer";
+import { Blocks } from "lucide-react";
+import { parseArtifacts, stripArtifacts } from "@/lib/artifacts";
+import { useUIStore } from "@/lib/store/ui-store";
 import { VersionSwitcher } from "@/components/chat/version-switcher";
 import { useChatStore, textOf, thinkingOf, type UiMessage } from "@/lib/store/chat-store";
 
@@ -80,8 +83,11 @@ export function MessageItem({
   const editMessage = useChatStore((state) => state.editMessage);
   const switchBranch = useChatStore((state) => state.switchBranch);
 
-  const text = textOf(message);
+  const rawText = textOf(message);
+  const artifacts = React.useMemo(() => parseArtifacts(rawText), [rawText]);
+  const text = artifacts.length ? stripArtifacts(rawText) : rawText;
   const thinking = thinkingOf(message);
+  const setArtifactsOpen = useUIStore((state) => state.setArtifactsOpen);
   const isUser = message.role === "user";
   const editing = editingId === message.id;
   const siblingIndex = message.siblingIndex ?? 0;
@@ -191,6 +197,22 @@ export function MessageItem({
             </p>
           ) : null}
         </div>
+      ) : null}
+
+      {artifacts.length ? (
+        <button
+          type="button"
+          onClick={() => setArtifactsOpen(true)}
+          className="flex w-fit items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent-foreground transition-colors hover:bg-accent/20"
+        >
+          <Blocks className="size-3.5" />
+          {artifacts.length === 1
+            ? `Artifact: ${artifacts[0].title ?? artifacts[0].identifier}`
+            : `${artifacts.length} artifacts`}
+          <span className="text-[10px] uppercase tracking-wide opacity-80">
+            {artifacts.map((artifact) => artifact.type).join(" · ")}
+          </span>
+        </button>
       ) : null}
 
       {text ? (

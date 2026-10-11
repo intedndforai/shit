@@ -262,6 +262,9 @@ export const artifacts = sqliteTable(
   (table) => [index("artifacts_chat_idx").on(table.chatId, table.identifier)]
 );
 
+export type Artifact = typeof artifacts.$inferSelect;
+export type NewArtifact = typeof artifacts.$inferInsert;
+
 /* ------------------------------------------------------------------ */
 /* Projects + RAG (M8)                                                 */
 /* ------------------------------------------------------------------ */

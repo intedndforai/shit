@@ -22,7 +22,7 @@ format. Requests go through your own server, so keys never reach the browser.
 | **M2** | Provider settings, OpenAI-compatible + Anthropic adapters, streaming chat, stop/regenerate, persistence | ✅ Shipped |
 | **M3** | Rich markdown/code/LaTeX/Mermaid rendering, titles, search, branching, export/import | ✅ Shipped |
 | **M4** | Files, vision, document parsing, attachments | ✅ Shipped |
-| M5 | Artifacts panel with sandboxing and versioning | ⏳ Planned |
+| **M5** | Artifacts panel with sandboxing and versioning | ✅ Shipped |
 | M6 | Tool calling, web search, fetch, code execution, citations | ⏳ Planned |
 | M7 | Thinking display, context meter, cost tracking, fallback + retry | ⏳ Partial (usage + cost tracking, retry/backoff) |
 | M8 | Projects, RAG, memory, styles, slash commands | ⏳ Planned |
@@ -48,6 +48,9 @@ What works today:
 - Attach text and code files, CSV, JSON, PDF, DOCX, XLSX, and images from the composer (picker,
   drag-and-drop, or paste). Text is extracted server-side; images are handed to the model as data
   URLs, so any vision-capable model you connect can read them. OCR for scanned PDFs is planned.
+- Models can wrap self-contained output in `<artifact>` tags: Conduit captures each emission as a
+  version, shows it in a side panel (HTML/SVG in a sandboxed iframe, Mermaid, Markdown, or code),
+  and can diff revisions. A `/artifacts` library lists everything across chats.
 - Light / dark / system themes and a user-selectable accent color.
 
 ## Screenshots

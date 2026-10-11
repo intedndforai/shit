@@ -372,6 +372,61 @@ if (textFile.body?.file?.id) {
   check("stored attachment is served back", served.status === 200 && servedText.includes("smoke attachment"));
 }
 
+// --- Milestone 5: artifacts ------------------------------------------------
+
+const artifactStream = async (message) => {
+  const response = await fetch(`${appUrl}/api/chat`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ chatId, message }),
+  });
+  if (!response.ok || !response.body) return "";
+  const rdr = response.body.getReader();
+  let buf = "";
+  let out = "";
+  while (true) {
+    const { done, value } = await rdr.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let index = buf.indexOf("\n\n");
+    while (index !== -1) {
+      const chunk = buf.slice(0, index).trim();
+      buf = buf.slice(index + 2);
+      index = buf.indexOf("\n\n");
+      if (!chunk.startsWith("data:")) continue;
+      const event = JSON.parse(chunk.slice(5).trim());
+      if (event.type === "text_delta") out += event.text;
+    }
+  }
+  return out;
+};
+
+const artifactText = await artifactStream("please build an artifact panel");
+check("artifact stream arrives", artifactText.includes("<artifact"), `${artifactText.length} chars`);
+
+const artifactList = await jsonFetch(`/api/artifacts?chatId=${chatId}`);
+const artifact = (artifactList.body?.artifacts ?? []).find((item) => item.identifier === "mock-panel");
+check(
+  "artifact captured with a type and title",
+  artifactList.status === 200 && artifact?.type === "html" && artifact?.title === "Mock panel",
+  artifact?.identifier
+);
+
+await artifactStream("please build an artifact panel again");
+const artifactList2 = await jsonFetch(`/api/artifacts?chatId=${chatId}`);
+const updated = (artifactList2.body?.artifacts ?? []).find((item) => item.identifier === "mock-panel");
+check("second emission increments the version", (updated?.versionCount ?? 0) >= 2, `v${updated?.versionCount}`);
+
+if (updated?.id) {
+  const detail = await jsonFetch(`/api/artifacts/${updated.id}`);
+  const versions = detail.body?.versions ?? [];
+  check(
+    "artifact versions are diffable",
+    versions.length >= 2 && versions[0].content !== versions[versions.length - 1].content,
+    `${versions.length} versions`
+  );
+}
+
 const failed = results.filter((result) => !result.ok);
 console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
 process.exitCode = failed.length === 0 ? 0 : 1;

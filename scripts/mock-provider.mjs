@@ -28,6 +28,13 @@ function json(res, status, body) {
   res.end(payload);
 }
 
+/** Escapes text so the artifact payload stays well-formed HTML. */
+function escapeHtml(value) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+let artifactRevision = 0;
+
 function reply(history) {
   const lastUser = [...history].reverse().find((message) => message.role === "user");
   const question =
@@ -36,6 +43,22 @@ function reply(history) {
       : Array.isArray(lastUser?.content)
         ? lastUser.content.map((part) => part.text ?? "").join(" ")
         : "";
+
+  if (/artifact/i.test(question)) {
+    artifactRevision += 1;
+    return [
+      "Here is a self-contained panel you can preview in the artifacts panel.",
+      "",
+      '<artifact identifier="mock-panel" type="html" title="Mock panel">',
+      '<div style="font:16px system-ui,sans-serif;padding:8px">',
+      `  <h1 style="margin:0 0 8px">Revision ${artifactRevision}</h1>`,
+      `  <p style="margin:0">Requested with: ${escapeHtml(question.trim())}</p>`,
+      "</div>",
+      "</artifact>",
+      "",
+      "Ask for an artifact again to see a new version and diff it.",
+    ].join("\n");
+  }
 
   return `You said: "${question.trim()}". This reply streamed token by token from the local mock provider, which proves Conduit's adapter, streaming, and persistence layers all work end to end.`;
 }

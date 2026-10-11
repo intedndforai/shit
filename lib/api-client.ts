@@ -112,6 +112,21 @@ export interface ChatDetail {
   provider: { id: string; name: string; apiFormat: string } | null;
 }
 
+export type ArtifactKind = "html" | "react" | "svg" | "mermaid" | "markdown" | "code";
+
+export interface ArtifactDto {
+  id: string;
+  chatId: string;
+  messageId: string | null;
+  identifier: string;
+  type: ArtifactKind;
+  title: string | null;
+  content: string;
+  version: number;
+  createdAt: number;
+  versionCount: number;
+}
+
 export interface UploadedFile {
   id: string;
   name: string;
@@ -197,4 +212,9 @@ export const api = {
     return upload<{ file: UploadedFile }>("/api/files", form);
   },
   getFileUrl: (id: string) => `/api/files/${id}`,
+
+  listArtifacts: (chatId?: string) =>
+    request<{ artifacts: ArtifactDto[] }>(`/api/artifacts${chatId ? `?chatId=${chatId}` : ""}`),
+  getArtifact: (id: string) =>
+    request<{ artifact: ArtifactDto; versions: ArtifactDto[] }>(`/api/artifacts/${id}`),
 };

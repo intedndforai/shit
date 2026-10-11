@@ -29,6 +29,7 @@ interface UIState {
   accent: Accent;
   /* Overlays */
   searchOpen: boolean;
+  artifactsOpen: boolean;
   /* Composer */
   composerDraft: string;
   attachments: DraftAttachment[];
@@ -38,6 +39,8 @@ interface UIState {
   setMobileNavOpen: (open: boolean) => void;
   setAccent: (accent: Accent) => void;
   setSearchOpen: (open: boolean) => void;
+  setArtifactsOpen: (open: boolean) => void;
+  toggleArtifacts: () => void;
   setComposerDraft: (draft: string) => void;
   addAttachments: (attachments: DraftAttachment[]) => void;
   updateAttachment: (id: string, patch: Partial<DraftAttachment>) => void;
@@ -52,6 +55,7 @@ export const useUIStore = create<UIState>()(
       mobileNavOpen: false,
       accent: "amber",
       searchOpen: false,
+      artifactsOpen: false,
       composerDraft: "",
       attachments: [],
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
@@ -59,6 +63,8 @@ export const useUIStore = create<UIState>()(
       setMobileNavOpen: (mobileNavOpen) => set({ mobileNavOpen }),
       setAccent: (accent) => set({ accent }),
       setSearchOpen: (searchOpen) => set({ searchOpen }),
+      setArtifactsOpen: (artifactsOpen) => set({ artifactsOpen }),
+      toggleArtifacts: () => set((state) => ({ artifactsOpen: !state.artifactsOpen })),
       setComposerDraft: (composerDraft) => set({ composerDraft }),
       addAttachments: (attachments) => set((state) => ({ attachments: [...state.attachments, ...attachments] })),
       updateAttachment: (id, patch) =>

@@ -97,6 +97,19 @@ OCR, and office-format conversion are explicitly **not** implemented yet.
 image previews in the transcript use. Attachments are capped at 25 MB and the bytes live outside the
 repository (`data/uploads/`, git-ignored) — only metadata and extracted text go into SQLite.
 
+## Artifacts (M5)
+
+`<artifact identifier="…" type="html|react|svg|mermaid|markdown|code" title="…">…</artifact>` blocks in
+an assistant answer are parsed once the stream finishes (`recordArtifacts` in `lib/server/artifacts.ts`),
+stored in the `artifacts` table, and versioned by identifier: re-emitting the same identifier creates
+`version + 1` alongside the previous content instead of replacing it.
+
+Parsing lives in `lib/artifacts.ts` so the client can strip the raw tags out of the transcript (showing
+a chip instead) without importing server code. The panel renders HTML/SVG in an
+`<iframe sandbox="allow-scripts allow-modals">` without `allow-same-origin`, so generated markup cannot
+read Conduit's storage or DOM; React artifacts are shown as source because compiling JSX in the browser
+is still planned. Versions are diffed client-side with the `diff` package.
+
 ## Provider contract
 
 ```ts
