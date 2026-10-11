@@ -21,7 +21,7 @@ format. Requests go through your own server, so keys never reach the browser.
 | **M1** | Scaffold, design system, layout, theming, DB schema, single-user mode | ✅ Shipped |
 | **M2** | Provider settings, OpenAI-compatible + Anthropic adapters, streaming chat, stop/regenerate, persistence | ✅ Shipped |
 | **M3** | Rich markdown/code/LaTeX/Mermaid rendering, titles, search, branching, export/import | ✅ Shipped |
-| M4 | Files, vision, document parsing, attachments | ⏳ Planned |
+| **M4** | Files, vision, document parsing, attachments | ✅ Shipped |
 | M5 | Artifacts panel with sandboxing and versioning | ⏳ Planned |
 | M6 | Tool calling, web search, fetch, code execution, citations | ⏳ Planned |
 | M7 | Thinking display, context meter, cost tracking, fallback + retry | ⏳ Partial (usage + cost tracking, retry/backoff) |
@@ -45,6 +45,9 @@ What works today:
 - `Ctrl`/`Cmd`+`K` searches chat titles and message bodies with highlighted snippets.
 - Chats auto-title themselves once the first answer exists, and can be exported or imported as
   Markdown or JSON.
+- Attach text and code files, CSV, JSON, PDF, DOCX, XLSX, and images from the composer (picker,
+  drag-and-drop, or paste). Text is extracted server-side; images are handed to the model as data
+  URLs, so any vision-capable model you connect can read them. OCR for scanned PDFs is planned.
 - Light / dark / system themes and a user-selectable accent color.
 
 ## Screenshots
@@ -117,7 +120,8 @@ A mock OpenAI-compatible provider ships with the repo:
 
 ```bash
 npm run mock:provider     # serves http://127.0.0.1:4123/v1 with two fake models
-npm run smoke             # 17 end-to-end checks: provider CRUD, streaming, persistence, regenerate
+npm run smoke
+npm run files:check             # 17 end-to-end checks: provider CRUD, streaming, persistence, regenerate
 ```
 
 Add a provider pointing at `http://127.0.0.1:4123/v1` (any key) to chat with the mock from the UI.
@@ -189,7 +193,8 @@ docs/                Architecture notes and screenshots
 | `npm run db:generate` | Generate SQL migrations from `lib/db/schema.ts`. |
 | `npm run db:studio` | Browse the database with Drizzle Studio. |
 | `npm run mock:provider` | Start the local mock provider on port 4123. |
-| `npm run smoke` | Run the end-to-end API checks against a running app. |
+| `npm run smoke
+npm run files:check` | Run the end-to-end API checks against a running app. |
 
 ## Security
 
@@ -206,7 +211,8 @@ docs/                Architecture notes and screenshots
 Issues and pull requests are welcome. Before opening a PR:
 
 ```bash
-npm run typecheck && npm run lint && npm run smoke    # with dev + mock provider running
+npm run typecheck && npm run lint && npm run smoke
+npm run files:check    # with dev + mock provider running
 ```
 
 Keep adapters vendor-neutral: new formats belong in `lib/providers/` behind the existing

@@ -330,6 +330,48 @@ check(
   chatList.status === 200 && chatList.body.chats.some((chat) => chat.id === chatId && chat.archived === true)
 );
 await jsonFetch(`/api/chats/${chatId}`, { method: "PATCH", body: JSON.stringify({ archived: false }) });
+// --- Milestone 4: attachments ---------------------------------------------
+
+const PNG_1X1 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==";
+
+const uploadFile = async (name, mime, bytes) => {
+  const form = new FormData();
+  form.append("file", new File([bytes], name, { type: mime }));
+  const response = await fetch(`${appUrl}/api/files`, { method: "POST", body: form });
+  const raw = await response.text();
+  let body = null;
+  try {
+    body = raw ? JSON.parse(raw) : null;
+  } catch {
+    body = raw;
+  }
+  return { status: response.status, body };
+};
+
+const textFile = await uploadFile("smoke-notes.txt", "text/plain", new TextEncoder().encode("Conduit smoke attachment"));
+check(
+  "attachment upload extracts text",
+  textFile.status === 201 && String(textFile.body?.file?.text ?? "").includes("smoke attachment"),
+  textFile.body?.file?.kind
+);
+
+const imageFile = await uploadFile("smoke-pixel.png", "image/png", Buffer.from(PNG_1X1, "base64"));
+check(
+  "image attachment becomes a data url",
+  imageFile.status === 201 && String(imageFile.body?.file?.dataUrl ?? "").startsWith("data:image/png;base64,"),
+  imageFile.body?.file?.kind
+);
+
+const rejectedFile = await uploadFile("smoke-archive.bin", "application/octet-stream", new Uint8Array([1, 2, 3]));
+check("unsupported attachment rejected", rejectedFile.status === 415, String(rejectedFile.body?.error ?? "").slice(0, 40));
+
+if (textFile.body?.file?.id) {
+  const served = await fetch(`${appUrl}/api/files/${textFile.body.file.id}`);
+  const servedText = await served.text();
+  check("stored attachment is served back", served.status === 200 && servedText.includes("smoke attachment"));
+}
+
 const failed = results.filter((result) => !result.ok);
 console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
-process.exit(failed.length === 0 ? 0 : 1);
+process.exitCode = failed.length === 0 ? 0 : 1;

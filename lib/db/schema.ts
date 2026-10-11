@@ -212,6 +212,34 @@ export type Message = typeof messages.$inferSelect;
 export type NewMessage = typeof messages.$inferInsert;
 
 /* ------------------------------------------------------------------ */
+/* Attachments (M4): bytes on disk, metadata + extracted text here     */
+/* ------------------------------------------------------------------ */
+
+export const attachmentKinds = ["text", "image", "document", "spreadsheet", "pdf", "other"] as const;
+export type AttachmentKind = (typeof attachmentKinds)[number];
+
+export const attachments = sqliteTable(
+  "attachments",
+  {
+    id: text("id").primaryKey().$defaultFn(uuid),
+    chatId: text("chat_id").references(() => chats.id, { onDelete: "cascade" }),
+    messageId: text("message_id").references(() => messages.id, { onDelete: "set null" }),
+    name: text("name").notNull(),
+    mime: text("mime").notNull(),
+    size: integer("size").notNull(),
+    kind: text("kind", { enum: [...attachmentKinds] }).notNull(),
+    storagePath: text("storage_path").notNull(),
+    text: text("text"),
+    truncated: integer("truncated", { mode: "boolean" }).notNull().default(false),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().$defaultFn(now),
+  },
+  (table) => [index("attachments_chat_idx").on(table.chatId), index("attachments_message_idx").on(table.messageId)]
+);
+
+export type Attachment = typeof attachments.$inferSelect;
+export type NewAttachment = typeof attachments.$inferInsert;
+
+/* ------------------------------------------------------------------ */
 /* Artifacts (M5)                                                      */
 /* ------------------------------------------------------------------ */
 

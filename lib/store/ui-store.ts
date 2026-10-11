@@ -6,6 +6,21 @@ import { persist } from "zustand/middleware";
 export const ACCENTS = ["amber", "rose", "teal", "indigo"] as const;
 export type Accent = (typeof ACCENTS)[number];
 
+/** An attachment in the composer: optimistic while the upload is in flight. */
+export interface DraftAttachment {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  kind?: string;
+  text?: string;
+  dataUrl?: string;
+  url?: string;
+  truncated?: boolean;
+  status: "uploading" | "ready" | "error";
+  error?: string;
+}
+
 interface UIState {
   /* Layout */
   sidebarCollapsed: boolean;
@@ -16,6 +31,7 @@ interface UIState {
   searchOpen: boolean;
   /* Composer */
   composerDraft: string;
+  attachments: DraftAttachment[];
   /* Actions */
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
@@ -23,6 +39,10 @@ interface UIState {
   setAccent: (accent: Accent) => void;
   setSearchOpen: (open: boolean) => void;
   setComposerDraft: (draft: string) => void;
+  addAttachments: (attachments: DraftAttachment[]) => void;
+  updateAttachment: (id: string, patch: Partial<DraftAttachment>) => void;
+  removeAttachment: (id: string) => void;
+  clearAttachments: () => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -33,12 +53,23 @@ export const useUIStore = create<UIState>()(
       accent: "amber",
       searchOpen: false,
       composerDraft: "",
+      attachments: [],
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       setMobileNavOpen: (mobileNavOpen) => set({ mobileNavOpen }),
       setAccent: (accent) => set({ accent }),
       setSearchOpen: (searchOpen) => set({ searchOpen }),
       setComposerDraft: (composerDraft) => set({ composerDraft }),
+      addAttachments: (attachments) => set((state) => ({ attachments: [...state.attachments, ...attachments] })),
+      updateAttachment: (id, patch) =>
+        set((state) => ({
+          attachments: state.attachments.map((attachment) =>
+            attachment.id === id ? { ...attachment, ...patch } : attachment
+          ),
+        })),
+      removeAttachment: (id) =>
+        set((state) => ({ attachments: state.attachments.filter((attachment) => attachment.id !== id) })),
+      clearAttachments: () => set({ attachments: [] }),
     }),
     {
       name: "conduit-ui",

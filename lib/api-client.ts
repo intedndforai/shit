@@ -20,6 +20,19 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
+async function upload<T>(url: string, form: FormData): Promise<T> {
+  const response = await fetch(url, { method: "POST", body: form });
+  const text = await response.text();
+  const payload = text ? (JSON.parse(text) as unknown) : {};
+
+  if (!response.ok) {
+    const message = (payload as { error?: string }).error ?? `Upload failed with status ${response.status}.`;
+    throw new Error(message);
+  }
+
+  return payload as T;
+}
+
 export interface PublicProvider {
   id: string;
   name: string;
@@ -99,6 +112,19 @@ export interface ChatDetail {
   provider: { id: string; name: string; apiFormat: string } | null;
 }
 
+export interface UploadedFile {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  kind: string;
+  text?: string;
+  dataUrl?: string;
+  truncated: boolean;
+  url: string;
+  createdAt: number;
+}
+
 export interface SearchHit {
   chatId: string;
   messageId: string | null;
@@ -164,4 +190,11 @@ export const api = {
     }),
 
   exportUrl: (chatId: string, format: "md" | "json") => `/api/chats/${chatId}/export?format=${format}`,
+
+  uploadFile: async (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return upload<{ file: UploadedFile }>("/api/files", form);
+  },
+  getFileUrl: (id: string) => `/api/files/${id}`,
 };

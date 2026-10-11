@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Brain, Check, Copy, Pencil, RefreshCw, TriangleAlert, X } from "lucide-react";
+import { Brain, Check, Copy, FileText, Pencil, RefreshCw, TriangleAlert, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -10,6 +10,58 @@ import { VersionSwitcher } from "@/components/chat/version-switcher";
 import { useChatStore, textOf, thinkingOf, type UiMessage } from "@/lib/store/chat-store";
 
 /** One conversation turn: user bubble or rendered assistant answer. */
+/** Image thumbnails and document chips attached to a user turn. */
+function AttachmentPreview({ message }: { message: UiMessage }) {
+  const images = message.content.filter((part) => part.kind === "image");
+  const documents = message.content.filter((part) => part.kind === "document");
+
+  if (!images.length && !documents.length) return null;
+
+  return (
+    <div className="flex flex-col items-end gap-1.5">
+      {images.length ? (
+        <div className="flex flex-wrap justify-end gap-1.5">
+          {images.map((part, index) =>
+            part.kind === "image" && (part.dataUrl || part.url) ? (
+              <a
+                key={`image-${index}`}
+                href={part.url ?? part.dataUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="block"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={part.dataUrl ?? part.url}
+                  alt={part.alt ?? "Attached image"}
+                  className="max-h-56 rounded-xl border border-border"
+                />
+              </a>
+            ) : null
+          )}
+        </div>
+      ) : null}
+
+      {documents.length ? (
+        <div className="flex flex-wrap justify-end gap-1.5">
+          {documents.map((part, index) =>
+            part.kind === "document" ? (
+              <span
+                key={`document-${index}`}
+                className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2 py-1 text-xs"
+                title={part.name}
+              >
+                <FileText className="size-3.5 text-muted-foreground" />
+                <span className="max-w-[12rem] truncate">{part.name}</span>
+              </span>
+            ) : null
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function MessageItem({
   message,
   isLastAssistant,
@@ -89,8 +141,13 @@ export function MessageItem({
           </div>
         ) : (
           <>
-            <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-secondary px-4 py-2.5 text-[15px] leading-relaxed">
-              {text}
+            <div className="flex max-w-[85%] flex-col items-end gap-1.5">
+              <AttachmentPreview message={message} />
+              {text ? (
+                <div className="whitespace-pre-wrap rounded-2xl bg-secondary px-4 py-2.5 text-[15px] leading-relaxed">
+                  {text}
+                </div>
+              ) : null}
             </div>
             <div className="flex items-center gap-1">
               <VersionSwitcher

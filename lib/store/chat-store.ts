@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import type { ContentPart } from "@/lib/db/schema";
+import { useUIStore } from "@/lib/store/ui-store";
 import { api, type ChatMessageDto, type ChatSummary } from "@/lib/api-client";
 
 export interface UiMessage {
@@ -130,9 +131,24 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   async send(text) {
     const trimmed = text.trim();
-    if (!trimmed || get().streaming) return;
+    const drafts = useUIStore
+      .getState()
+      .attachments.filter((attachment) => attachment.status === "ready");
+    if ((!trimmed && !drafts.length) || get().streaming) return;
+
+    const parts: ContentPart[] = [];
+    if (trimmed) parts.push({ kind: "text", text: trimmed });
+    for (const draft of drafts) {
+      if (draft.kind === "image" && draft.dataUrl) {
+        parts.push({ kind: "image", dataUrl: draft.dataUrl, alt: draft.name });
+      } else if (draft.text) {
+        parts.push({ kind: "document", name: draft.name, mime: draft.mime, text: draft.text });
+      }
+    }
+
     set({ editingId: null });
-    await runStream(set, get, { message: trimmed });
+    useUIStore.getState().clearAttachments();
+    await runStream(set, get, { message: parts });
   },
 
   async regenerate() {
@@ -219,7 +235,7 @@ type Getter = () => ChatState;
 async function runStream(
   set: Setter,
   get: Getter,
-  payload: { message?: string; regenerate?: boolean; continueFromLeaf?: boolean }
+  payload: { message?: string | ContentPart[]; regenerate?: boolean; continueFromLeaf?: boolean }
 ): Promise<void> {
   const state = get();
   const controller = new AbortController();
@@ -229,7 +245,10 @@ async function runStream(
     ? {
         id: `local-user-${Date.now()}`,
         role: "user",
-        content: [{ kind: "text", text: payload.message }],
+        content:
+          typeof payload.message === "string"
+            ? [{ kind: "text", text: payload.message }]
+            : payload.message,
         createdAt: Date.now(),
       }
     : null;

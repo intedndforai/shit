@@ -15,6 +15,13 @@
       "when": 1791695803796,
       "tag": "0001_flawless_vampiro",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791697566639,
+      "tag": "0002_lethal_gressill",
+      "breakpoints": true
     }
   ]
 }
