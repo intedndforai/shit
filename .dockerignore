@@ -1,11 +1,8 @@
 node_modules
 .next
-out
-build
-data
+.open-next
 .git
-.env
-.env*.local
-*.db
-playwright-report
-test-results
+.tmp
+.tools
+data
+*.log

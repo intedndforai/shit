@@ -1,36 +1,21 @@
-# ---- Base ----
-FROM node:24-slim AS base
+FROM node:20-bookworm-slim AS deps
 WORKDIR /app
-ENV NEXT_TELEMETRY_DISABLED=1
-
-# ---- Dependencies ----
-FROM base AS deps
-COPY package.json package-lock.json* ./
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY package.json package-lock.json ./
 RUN npm ci
 
-# ---- Builder ----
-FROM base AS builder
+FROM node:20-bookworm-slim AS build
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
-# ---- Runner ----
-FROM base AS runner
+FROM node:20-bookworm-slim AS run
+WORKDIR /app
 ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
-ENV HOSTNAME=0.0.0.0
-
-RUN groupadd --system --gid 1001 nodejs && useradd --system --uid 1001 nextjs
-
-COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-
-USER nextjs
-# User data and secrets are created at runtime, never baked into the image.
-RUN rm -rf ./data ./.env ./.next/cache
-
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=build /app ./
 EXPOSE 3000
-CMD ["node", "server.js"]
+CMD ["npm", "run", "start"]
