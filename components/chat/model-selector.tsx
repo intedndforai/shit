@@ -88,7 +88,7 @@ export function ModelSelector() {
             <Button
               variant="ghost"
               size="sm"
-              className="max-w-[12rem] gap-1.5 px-2"
+              className="min-w-0 max-w-[12rem] gap-1.5 px-2"
               aria-label="Choose the model for this chat"
             >
               {loading ? (

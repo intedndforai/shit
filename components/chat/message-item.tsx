@@ -211,7 +211,12 @@ function MessageItemComponent({
   }
 
   return (
-    <article className="group flex flex-col gap-2" aria-label="Assistant message">
+    <article
+      className="group flex flex-col gap-2"
+      aria-label="Assistant message"
+      aria-live="polite"
+      aria-busy={Boolean(message.streaming)}
+    >
       {thinking ? (
         <div className="rounded-xl border border-border bg-secondary/40">
           <button
@@ -254,7 +259,7 @@ function MessageItemComponent({
       ) : null}
 
       {text ? (
-        <MarkdownRenderer content={text} />
+        <MarkdownRenderer content={text} streaming={Boolean(message.streaming)} />
       ) : message.streaming ? (
         <p className="text-sm text-muted-foreground">Waiting for the first token...</p>
       ) : null}

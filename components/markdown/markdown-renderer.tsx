@@ -49,12 +49,17 @@ function nodeText(node: React.ReactNode): string {
 function MarkdownRendererComponent({
   content,
   className,
+  streaming = false,
 }: {
   content: string;
   className?: string;
+  /** True while tokens are still arriving for this message. */
+  streaming?: boolean;
 }) {
   const [expanded, setExpanded] = React.useState(false);
-  const collapsible = content.length > COLLAPSE_THRESHOLD;
+  // Capping a half-written answer at 420px fights the auto-scroll, so the
+  // "Show full answer" treatment waits until the message is complete.
+  const collapsible = !streaming && content.length > COLLAPSE_THRESHOLD;
 
   const components = React.useMemo<Components>(() => {
     return {
@@ -136,11 +141,17 @@ function MarkdownRendererComponent({
       >
         <ReactMarkdown
           remarkPlugins={[remarkGfm, remarkMath]}
-          rehypePlugins={[
-            rehypeKatex,
-            [rehypeHighlight, { ignoreMissing: true, detect: false }],
-            [rehypeSanitize, schema],
-          ]}
+          // Highlighting re-tokenizes the whole answer, which costs more than it
+          // shows while tokens are still arriving; it lands on the last frame.
+          rehypePlugins={
+            streaming
+              ? [rehypeKatex, [rehypeSanitize, schema]]
+              : [
+                  rehypeKatex,
+                  [rehypeHighlight, { ignoreMissing: true, detect: false }],
+                  [rehypeSanitize, schema],
+                ]
+          }
           components={components}
         >
           {content}

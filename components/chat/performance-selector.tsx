@@ -94,7 +94,7 @@ export function PerformanceSelector() {
             <Button
               variant="ghost"
               size="sm"
-              className="max-w-[10rem] gap-1.5 px-2"
+              className="min-w-0 max-w-[10rem] gap-1.5 px-2"
               aria-label="Choose AI performance for this chat"
             >
               {loading ? (
@@ -102,7 +102,7 @@ export function PerformanceSelector() {
               ) : (
                 <Gauge className="size-3.5 text-accent" />
               )}
-              <span className="truncate text-xs">{active?.name ?? "Balanced"}</span>
+              <span className="hidden truncate text-xs sm:inline">{active?.name ?? "Balanced"}</span>
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
