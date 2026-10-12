@@ -19,6 +19,7 @@ export function ThemeSelect() {
       <SelectContent>
         <SelectItem value="light">Light</SelectItem>
         <SelectItem value="dark">Dark</SelectItem>
+        <SelectItem value="contrast">High contrast</SelectItem>
         <SelectItem value="system">System</SelectItem>
       </SelectContent>
     </Select>

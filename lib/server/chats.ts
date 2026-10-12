@@ -2,6 +2,7 @@ import { asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { chats, messages, usageEvents, type Chat, type ChatRole, type ContentPart } from "@/lib/db/schema";
+import { getChatDefaults } from "@/lib/server/defaults";
 
 /** Server-side chat + message persistence and usage accounting. */
 
@@ -81,14 +82,25 @@ export function createChat(input: {
   incognito?: boolean;
   privacyMode?: "standard" | "private" | "incognito" | "local";
   toolsEnabled?: string[] | null;
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+  thinkingBudget?: number | null;
 }): Chat {
+  // New chats inherit the workspace defaults so "AI performance" and the
+  // default model are already selected on the very first turn.
+  const defaults = getChatDefaults();
   return getDb()
     .insert(chats)
     .values({
       title: input.title ?? null,
       providerId: input.providerId ?? null,
-      modelId: input.modelId ?? null,
+      modelId: input.modelId ?? defaults.modelId ?? null,
       systemPrompt: input.systemPrompt ?? null,
+      temperature: input.temperature ?? defaults.controls.temperature,
+      topP: input.topP ?? defaults.controls.topP,
+      maxTokens: input.maxTokens ?? defaults.controls.maxTokens,
+      thinkingBudget: input.thinkingBudget ?? defaults.controls.thinkingBudget,
       projectId: input.projectId ?? null,
       styleId: input.styleId ?? null,
       incognito: input.incognito ?? input.privacyMode === "incognito",

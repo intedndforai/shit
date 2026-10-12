@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import {
   Archive,
   ArchiveRestore,
@@ -460,12 +460,13 @@ export function Sidebar() {
   const collapsed = useUIStore((state) => state.sidebarCollapsed);
   const toggleSidebar = useUIStore((state) => state.toggleSidebar);
   const ToggleIcon = collapsed ? PanelLeftOpen : PanelLeftClose;
+  const reduceMotion = useReducedMotion();
 
   return (
     <motion.aside
       initial={false}
       animate={{ width: collapsed ? 68 : 264 }}
-      transition={{ type: "spring", stiffness: 320, damping: 32 }}
+      transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 320, damping: 32 }}
       className="hidden shrink-0 border-r border-sidebar-border bg-sidebar md:flex md:flex-col"
       aria-label="Sidebar"
     >

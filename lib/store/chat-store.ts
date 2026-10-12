@@ -301,6 +301,16 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       toolsEnabled: useUIStore.getState().pendingTools,
       modelId: pendingModelId,
       research: useUIStore.getState().researchMode || undefined,
+      // A brand-new chat has no server row yet, so the first turn carries the
+      // generation controls the composer is showing; createChat persists them.
+      ...(state.chatId
+        ? {}
+        : {
+            temperature: state.chatTemperature,
+            topP: state.chatTopP,
+            maxTokens: state.chatMaxTokens,
+            thinkingBudget: state.chatThinkingBudget,
+          }),
       // Incognito chats are never written to the database, so the tab sends the
       // transcript it is showing to keep multi-turn context.
       history: incognito
@@ -485,6 +495,11 @@ async function runStream(
     toolsEnabled?: string[] | null;
     modelId?: string | null;
     research?: boolean;
+    /** Only sent for a brand-new chat, whose row does not exist yet. */
+    temperature?: number;
+    topP?: number;
+    maxTokens?: number;
+    thinkingBudget?: number | null;
     history?: Array<{ role: "system" | "user" | "assistant" | "tool"; content: ContentPart[] }>;
     allowCredentials?: boolean;
     allowPolicyOnce?: boolean;
@@ -534,6 +549,10 @@ async function runStream(
         toolsEnabled: payload.toolsEnabled,
         modelId: payload.modelId ?? undefined,
         research: payload.research,
+        temperature: payload.temperature,
+        topP: payload.topP,
+        maxTokens: payload.maxTokens,
+        thinkingBudget: payload.thinkingBudget,
         history: payload.history,
         allowCredentials: payload.allowCredentials,
         allowPolicyOnce: payload.allowPolicyOnce,
@@ -581,6 +600,37 @@ async function runStream(
     let buffer = "";
     let assistantId: string | null = null;
 
+    // Streaming coalescing. Text and reasoning arrive one token at a time and
+    // every store write re-renders (and re-parses) the entire answer, so a fast
+    // model can outrun the browser's paint loop. Buffer deltas and flush at
+    // most once per animation frame; any other event flushes first so the order
+    // of content parts is preserved.
+    let pendingText = "";
+    let pendingReasoning = "";
+    let flushScheduled = false;
+    const flushPending = () => {
+      if (pendingText) {
+        const text = pendingText;
+        pendingText = "";
+        handleEvent({ type: "text_delta", text }, streamingId, set, get);
+      }
+      if (pendingReasoning) {
+        const text = pendingReasoning;
+        pendingReasoning = "";
+        handleEvent({ type: "reasoning_delta", text }, streamingId, set, get);
+      }
+    };
+    const scheduleFlush = () => {
+      if (flushScheduled) return;
+      flushScheduled = true;
+      const run = () => {
+        flushScheduled = false;
+        flushPending();
+      };
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+      else setTimeout(run, 16);
+    };
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -597,9 +647,21 @@ async function runStream(
         if (event.type === "message_ids" && typeof event.assistantMessageId === "string") {
           assistantId = event.assistantMessageId;
         }
-        handleEvent(event, streamingId, set, get);
+        if (event.type === "text_delta") {
+          pendingText += (event.text as string) ?? "";
+          scheduleFlush();
+        } else if (event.type === "reasoning_delta") {
+          pendingReasoning += (event.text as string) ?? "";
+          scheduleFlush();
+        } else {
+          flushPending();
+          handleEvent(event, streamingId, set, get);
+        }
       }
     }
+
+    // Apply any deltas buffered in the final frame before reconciling.
+    flushPending();
 
     // Reconcile with the server (real ids, branch metadata) once the stream
     // ends. Incognito chats have no server copy, so the tab keeps what it

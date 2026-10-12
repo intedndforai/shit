@@ -84,7 +84,7 @@ function AttachmentPreview({ message }: { message: UiMessage }) {
   );
 }
 
-export function MessageItem({
+function MessageItemComponent({
   message,
   isLastAssistant,
   onRegenerate,
@@ -327,3 +327,6 @@ export function MessageItem({
     </article>
   );
 }
+
+/** Memoized so a streaming answer only re-renders its own bubble, not the transcript. */
+export const MessageItem = React.memo(MessageItemComponent);

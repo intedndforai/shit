@@ -258,6 +258,12 @@ export async function POST(request: Request) {
       providerId: provider.id,
       modelId: model.id,
       systemPrompt: body.systemPrompt ?? null,
+      // The composer may have chosen a different model/performance than the
+      // stored defaults; the first turn's values win and are persisted here.
+      temperature: body.temperature,
+      topP: body.topP,
+      maxTokens: body.maxTokens,
+      thinkingBudget: body.thinkingBudget ?? null,
     });
   } else if (body.modelId && body.modelId !== chat.modelId) {
     chat = updateChat(chat.id, { modelId: body.modelId, providerId: provider.id }) ?? chat;
@@ -537,27 +543,6 @@ export async function POST(request: Request) {
 
       const send = (event: OutgoingEvent) => controller.enqueue(encoder.encode(sseEncode(event)));
 
-      /** Streams one provider turn and buffers the events (a fallback may need a retry). */
-      const streamTurn = async (activeModel: typeof model, activeProvider: typeof provider) => {
-        const adapter = getAdapter(activeProvider.apiFormat as never);
-        const connection = connectionFromProvider(activeProvider);
-        const events: StreamEvent[] = [];
-        for await (const event of adapter.stream({
-          ...connection,
-          model: activeModel.externalId,
-          system: systemPrompt,
-          messages: history,
-          temperature: body.temperature ?? settings.temperature,
-          topP: body.topP ?? settings.topP,
-          maxTokens: body.maxTokens ?? settings.maxTokens,
-          thinkingBudget: body.thinkingBudget ?? settings.thinkingBudget,
-          tools,
-          signal: ac.signal,
-        })) {
-          events.push(event);
-        }
-        return events;
-      };
 
       const pushText = (delta: string) => {
         const last = timeline[timeline.length - 1];
@@ -685,53 +670,31 @@ export async function POST(request: Request) {
           round += 1;
           const pending = new Map<string, { name: string; input: unknown; args: string }>();
           const roundText: string[] = [];
+          // True once this turn has emitted anything to the client. A fallback
+          // retry is only safe before that point: replaying after the user has
+          // already seen output would duplicate or contradict it.
+          let turnEmitted = false;
 
-          let roundEvents: StreamEvent[];
-          try {
-            roundEvents = await streamTurn(model, provider);
-          } catch (error) {
-            const fallback = fallbackModelFor(model);
-            const canFallback =
-              Boolean(fallback) &&
-              !usedFallback &&
-              !ac.signal.aborted &&
-              error instanceof ProviderError &&
-              error.retryable;
-            if (!canFallback || !fallback) throw error;
-
-            const fallbackProvider = getProvider(fallback.providerId);
-            if (!fallbackProvider) throw error;
-
-            usedFallback = true;
-            send({
-              type: "model_switch",
-              modelLabel: fallback.displayName ?? fallback.externalId,
-              reason: error.message,
-            });
-            model = fallback;
-            provider = fallbackProvider;
-            chat = updateChat(chatId, { modelId: fallback.id, providerId: fallbackProvider.id }) ?? chat;
-            roundEvents = await streamTurn(model, provider);
-          }
-
-          for (const event of roundEvents) {
+          const handleTurnEvent = (event: StreamEvent): void => {
             if (event.type === "text_delta") {
               if (reasoningStartedAt && !reasoningEndedAt) reasoningEndedAt = Date.now();
               const text = restorer ? restorer.push(event.text) : event.text;
-              if (!text) continue;
+              if (!text) return;
               roundText.push(text);
               textParts.push(text);
               pushText(text);
+              turnEmitted = true;
               send({ type: "text_delta", text });
-              continue;
+              return;
             }
             if (event.type === "reasoning_delta") {
               const text = restorer ? restorer.push(event.text) : event.text;
-              if (!text) continue;
+              if (!text) return;
               reasoningParts.push(text);
               if (!reasoningStartedAt) reasoningStartedAt = Date.now();
+              turnEmitted = true;
               send({ type: "reasoning_delta", text });
-              continue;
+              return;
             }
             if (event.type === "usage") {
               usage = {
@@ -739,17 +702,18 @@ export async function POST(request: Request) {
                 completionTokens: usage.completionTokens + (event.usage.completionTokens ?? 0),
                 totalTokens: usage.totalTokens + (event.usage.totalTokens ?? 0),
               };
-              continue;
+              return;
             }
             if (event.type === "tool_call_start") {
               pending.set(event.id, { name: event.name, input: {}, args: "" });
+              turnEmitted = true;
               send(event);
-              continue;
+              return;
             }
             if (event.type === "tool_call_delta") {
               const call = pending.get(event.id);
               if (call) call.args += event.argumentsDelta;
-              continue;
+              return;
             }
             if (event.type === "tool_call_end") {
               const call = pending.get(event.id);
@@ -767,13 +731,64 @@ export async function POST(request: Request) {
                 call.input = input;
                 call.args = "";
               }
+              turnEmitted = true;
               send({ type: "tool_call_end", id: event.id, input });
-              continue;
+              return;
             }
             if (event.type === "error") {
               throw new ProviderError(event.message, { status: event.status });
             }
-            if (event.type === "done") continue;
+            if (event.type === "done") return;
+          };
+
+          // Streams one provider turn and forwards each normalized event to the
+          // handler the moment it arrives. Nothing is buffered, so the first
+          // token reaches the client as soon as the provider emits it.
+          const runTurn = async (activeModel: typeof model, activeProvider: typeof provider) => {
+            const adapter = getAdapter(activeProvider.apiFormat as never);
+            const connection = connectionFromProvider(activeProvider);
+            for await (const event of adapter.stream({
+              ...connection,
+              model: activeModel.externalId,
+              system: systemPrompt,
+              messages: history,
+              temperature: body.temperature ?? settings.temperature,
+              topP: body.topP ?? settings.topP,
+              maxTokens: body.maxTokens ?? settings.maxTokens,
+              thinkingBudget: body.thinkingBudget ?? settings.thinkingBudget,
+              tools,
+              signal: ac.signal,
+            })) {
+              handleTurnEvent(event);
+            }
+          };
+
+          try {
+            await runTurn(model, provider);
+          } catch (error) {
+            const fallback = fallbackModelFor(model);
+            const canFallback =
+              Boolean(fallback) &&
+              !usedFallback &&
+              !turnEmitted &&
+              !ac.signal.aborted &&
+              error instanceof ProviderError &&
+              error.retryable;
+            if (!canFallback || !fallback) throw error;
+
+            const fallbackProvider = getProvider(fallback.providerId);
+            if (!fallbackProvider) throw error;
+
+            usedFallback = true;
+            send({
+              type: "model_switch",
+              modelLabel: fallback.displayName ?? fallback.externalId,
+              reason: error.message,
+            });
+            model = fallback;
+            provider = fallbackProvider;
+            chat = updateChat(chatId, { modelId: fallback.id, providerId: fallbackProvider.id }) ?? chat;
+            await runTurn(model, provider);
           }
 
           if (!pending.size) break;

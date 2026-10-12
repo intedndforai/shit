@@ -2,7 +2,7 @@
 
 import { useTheme } from "next-themes";
 import { useIsMounted } from "@/lib/hooks/use-mounted";
-import { Monitor, Moon, Sun } from "lucide-react";
+import { Contrast, Monitor, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -15,6 +15,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 const OPTIONS = [
   { value: "light", label: "Light", icon: Sun },
   { value: "dark", label: "Dark", icon: Moon },
+  { value: "contrast", label: "High contrast", icon: Contrast },
   { value: "system", label: "System", icon: Monitor },
 ] as const;
 
@@ -22,7 +23,7 @@ export function ThemeToggle() {
   const { theme, setTheme, resolvedTheme } = useTheme();
   const mounted = useIsMounted();
 
-  const ActiveIcon = resolvedTheme === "dark" ? Moon : Sun;
+  const ActiveIcon = theme === "contrast" ? Contrast : resolvedTheme === "dark" ? Moon : Sun;
 
   return (
     <DropdownMenu>

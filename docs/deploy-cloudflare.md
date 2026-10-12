@@ -13,6 +13,38 @@ Summary of the three routes:
 | Containers | Paid Workers plan | None, uses the existing `Dockerfile` | Standalone server verified locally |
 | Tunnel | Free | None | Works with the running app |
 
+## Start here: the free path that works today (Cloudflare Tunnel)
+
+Two commands, no Cloudflare account, no login, no code changes:
+
+```bash
+npm install
+npm run build
+npm start          # terminal 1 -> http://localhost:3000
+```
+
+```bash
+npm run tunnel     # terminal 2 -> prints https://<random>.trycloudflare.com
+```
+
+`npm run tunnel` wraps `cloudflared tunnel --url http://localhost:3000` and
+prints the public URL once the edge assigns one. Open that URL from any device
+and Conduit behaves exactly as it does locally, because it *is* the local
+server. `cloudflared` is looked up in this order: `$CLOUDFLARED`, `.tools/cloudflared.exe`,
+then `cloudflared` on `PATH`.
+
+Set `NEXT_PUBLIC_APP_URL` to the printed URL so share links and absolute URLs
+point at the public host. The URL changes on each restart, and the machine has
+to stay on — the tunnel dies with it. For a stable hostname, create a named
+tunnel (`cloudflared tunnel login` once, then `tunnel create` + `tunnel route dns`).
+
+**Read this before trying Workers or Pages.** The Workers upload can be made to
+succeed, but the app will not *run* there: it keeps SQLite on disk
+(`better-sqlite3` is a native module with no Worker equivalent) and writes
+uploads to `data/uploads`. A successful `wrangler deploy` therefore produces a
+Worker that fails on the first API call. The Tunnel is the path that gives you a
+public HTTPS URL for free today; the paid Containers path and the free-but-large
+D1 + R2 refactor are described below.
 ## What the repository configures for Workers
 
 Two files at the repository root drive a Worker build, and both have to agree

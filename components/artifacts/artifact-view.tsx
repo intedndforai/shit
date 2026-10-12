@@ -154,7 +154,7 @@ export function ArtifactView({
 }) {
   const mounted = useIsMounted();
   const { resolvedTheme } = useTheme();
-  const dark = mounted && resolvedTheme === "dark";
+  const dark = mounted && (resolvedTheme === "dark" || resolvedTheme === "contrast");
   const canPreview = PREVIEWABLE.has(artifact.type);
 
   const [fullscreen, setFullscreen] = React.useState(false);

@@ -46,7 +46,7 @@ function nodeText(node: React.ReactNode): string {
   return "";
 }
 
-export function MarkdownRenderer({
+function MarkdownRendererComponent({
   content,
   className,
 }: {
@@ -163,3 +163,6 @@ export function MarkdownRenderer({
     </div>
   );
 }
+
+/** Memoized: identical markdown (every completed message) is never re-parsed. */
+export const MarkdownRenderer = React.memo(MarkdownRendererComponent);

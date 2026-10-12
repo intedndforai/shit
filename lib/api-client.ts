@@ -387,6 +387,22 @@ export interface StoredPreset {
   thinkingBudget: number | null;
   systemPrompt?: string | null;
 }
+/** A saved or built-in preset as offered by the defaults endpoint. */
+export interface PresetOptionDto extends StoredPreset {
+  builtin: boolean;
+}
+
+/** The model + "AI performance" preset a brand-new chat starts with. */
+export interface ChatDefaultsDto {
+  presetId: string;
+  controls: {
+    temperature: number;
+    topP: number;
+    maxTokens: number;
+    thinkingBudget: number | null;
+  };
+  modelId: string | null;
+}
 
 
 export interface SkillDto {
@@ -631,6 +647,17 @@ export const api = {
   listPresets: () => request<{ presets: StoredPreset[] }>("/api/presets"),
   savePresets: (presets: StoredPreset[]) =>
     request<{ presets: StoredPreset[] }>("/api/presets", { method: "PUT", body: JSON.stringify({ presets }) }),
+
+  /* --- Workspace chat defaults (model + AI performance) ------------------ */
+  getDefaults: () =>
+    request<{ defaults: ChatDefaultsDto; presets: PresetOptionDto[]; models: ModelOptionDto[] }>(
+      "/api/defaults"
+    ),
+  saveDefaults: (patch: { presetId?: string; modelId?: string | null }) =>
+    request<{ defaults: ChatDefaultsDto; presets: PresetOptionDto[]; models: ModelOptionDto[] }>(
+      "/api/defaults",
+      { method: "PUT", body: JSON.stringify(patch) }
+    ),
 
   postToolResult: (input: { id: string; decision?: "run" | "deny"; output?: string; isError?: boolean }) =>
     request<{ ok: true }>("/api/chat/tool-result", { method: "POST", body: JSON.stringify(input) }),

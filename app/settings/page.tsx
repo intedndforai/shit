@@ -9,6 +9,7 @@ import { McpServersManager } from "@/components/settings/mcp-servers";
 import { MemoryManager } from "@/components/settings/memory-manager";
 import { ModelRolesManager } from "@/components/settings/model-roles";
 import { PresetsManager } from "@/components/settings/presets-manager";
+import { ChatDefaults } from "@/components/settings/chat-defaults";
 import { ProfileManager } from "@/components/settings/profile-manager";
 import { PromptsManager } from "@/components/settings/prompts-manager";
 import { SkillsManager } from "@/components/settings/skills-manager";
@@ -80,6 +81,8 @@ export default function SettingsPage() {
       <ModelRolesManager />
 
       <PresetsManager />
+
+      <ChatDefaults />
 
       <Card>
         <CardHeader>

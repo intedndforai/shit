@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ShortcutsDialog } from "@/components/layout/shortcut-dialog";
+import { ModelSelector } from "@/components/chat/model-selector";
+import { PerformanceSelector } from "@/components/chat/performance-selector";
 import { useUIStore } from "@/lib/store/ui-store";
 import { useChatStore } from "@/lib/store/chat-store";
 import { useRouter } from "next/navigation";
@@ -20,7 +22,6 @@ export function Topbar() {
 
   const chatId = useChatStore((state) => state.chatId);
   const chatTitle = useChatStore((state) => state.chatTitle);
-  const chatModelLabel = useChatStore((state) => state.chatModelLabel);
   const chatArchived = useChatStore((state) => state.chatArchived);
   const renameChat = useChatStore((state) => state.renameChat);
   const openChat = useChatStore((state) => state.openChat);
@@ -91,15 +92,8 @@ export function Topbar() {
           <span className="px-2 text-sm font-medium text-muted-foreground">New chat</span>
         )}
 
-        {chatId ? (
-          <Badge variant="outline" className="hidden max-w-[16rem] truncate lg:inline-flex">
-            {chatModelLabel ?? "No model"}
-          </Badge>
-        ) : (
-          <Badge variant="outline" className="hidden lg:inline-flex">
-            Provider-agnostic
-          </Badge>
-        )}
+        <ModelSelector />
+        <PerformanceSelector />
         {chatArchived ? (
           <Badge variant="warning" className="hidden sm:inline-flex">
             Archived

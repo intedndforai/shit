@@ -2,7 +2,7 @@
 @import "tw-animate-css";
 
 /* Dark mode is class-driven so the user can pick Light / Dark / System. */
-@custom-variant dark (&:is(.dark *));
+@custom-variant dark (&:is(.dark *, .contrast *));
 
 /* ------------------------------------------------------------------ */
 /* Design tokens                                                       */
@@ -386,3 +386,60 @@
 .katex {
   font-size: 1.05em;
 }
+/* ------------------------------------------------------------------ */
+/* High contrast theme — pure black & white, accents stay vivid        */
+/* Selected via next-themes ("contrast" class on <html>).              */
+/* ------------------------------------------------------------------ */
+
+.contrast {
+  --background: oklch(0 0 0);
+  --foreground: oklch(1 0 0);
+  --card: oklch(0 0 0);
+  --card-foreground: oklch(1 0 0);
+  --popover: oklch(0.08 0 0);
+  --popover-foreground: oklch(1 0 0);
+  --primary: oklch(1 0 0);
+  --primary-foreground: oklch(0 0 0);
+  --secondary: oklch(0.16 0 0);
+  --secondary-foreground: oklch(1 0 0);
+  --muted: oklch(0.15 0 0);
+  --muted-foreground: oklch(0.88 0 0);
+  --border: oklch(1 0 0 / 0.6);
+  --input: oklch(1 0 0 / 0.28);
+  --destructive: oklch(0.72 0.2 25);
+  --destructive-foreground: oklch(0 0 0);
+  --sidebar: oklch(0 0 0);
+  --sidebar-foreground: oklch(1 0 0);
+  --sidebar-border: oklch(1 0 0 / 0.6);
+  --shadow-soft: none;
+}
+
+/* Brighter, saturation-forward accents so they pop on pure black. */
+.contrast[data-accent="amber"] { --accent: oklch(0.85 0.16 78); --accent-foreground: oklch(0 0 0); }
+.contrast[data-accent="rose"]  { --accent: oklch(0.76 0.17 18); --accent-foreground: oklch(0 0 0); }
+.contrast[data-accent="teal"]  { --accent: oklch(0.82 0.14 190); --accent-foreground: oklch(0 0 0); }
+.contrast[data-accent="indigo"]{ --accent: oklch(0.80 0.15 275); --accent-foreground: oklch(0 0 0); }
+
+.contrast ::selection { background: var(--accent); color: var(--accent-foreground); }
+
+.contrast :focus-visible {
+  outline: 3px solid var(--foreground);
+  outline-offset: 2px;
+}
+
+/* Code tokens need a lift to stay legible on pure black. */
+.contrast .hljs-keyword,
+.contrast .hljs-selector-tag,
+.contrast .hljs-literal,
+.contrast .hljs-doctag,
+.contrast .hljs-name { color: oklch(0.82 0.15 305); }
+.contrast .hljs-string,
+.contrast .hljs-regexp,
+.contrast .hljs-addition,
+.contrast .hljs-attribute { color: oklch(0.85 0.15 150); }
+.contrast .hljs-number,
+.contrast .hljs-variable,
+.contrast .hljs-type { color: oklch(0.86 0.14 60); }
+.contrast .hljs-title,
+.contrast .hljs-section,
+.contrast .hljs-built_in { color: oklch(0.84 0.13 250); }
