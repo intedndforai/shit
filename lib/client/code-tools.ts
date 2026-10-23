@@ -2,6 +2,7 @@
 
 import { api } from "@/lib/api-client";
 import { useUIStore, type ToolRunFile, type ToolRunState } from "@/lib/store/ui-store";
+import { useChatStore } from "@/lib/store/chat-store";
 
 /**
  * Runs the tools that execute in the browser (Python via Pyodide, JavaScript in
@@ -91,7 +92,7 @@ function patch(id: string, update: Partial<ToolRunState>) {
 
 async function postOutcome(id: string, output: string, isError: boolean) {
   try {
-    await api.postToolResult({ id, output, isError });
+    await api.postToolResult({ id, chatId: useChatStore.getState().chatId ?? "", output, isError });
   } catch (error) {
     // The stream may have ended (timeout, reload, cancel); nothing else to do.
     console.warn("Conduit: could not deliver the tool result.", error);
@@ -216,7 +217,7 @@ export async function runToolInBrowser(id: string): Promise<void> {
 export async function denyToolInBrowser(id: string): Promise<void> {
   patch(id, { status: "denied", error: "Declined by the user." });
   try {
-    await api.postToolResult({ id, decision: "deny" });
+    await api.postToolResult({ id, chatId: useChatStore.getState().chatId ?? "", decision: "deny" });
   } catch (error) {
     console.warn("Conduit: could not deliver the tool decision.", error);
   }

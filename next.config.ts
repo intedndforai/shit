@@ -77,7 +77,10 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     return [
-      { source: "/(.*)", headers: SECURITY_HEADERS },
+      // API routes opt out of this global CSP: Next applies config headers
+      // after route handlers, so a blanket match would override the sandbox /
+      // previewCsp() policies that /api/files/[id] and the preview routes set.
+      { source: "/((?!api/).*)", headers: SECURITY_HEADERS },
       // Chat and API responses are never cached (Section 3.2).
       {
         source: "/api/:path*",

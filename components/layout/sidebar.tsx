@@ -10,6 +10,7 @@ import {
   Blocks,
   ChevronRight,
   Download,
+  FileCode2,
   FileJson,
   FolderKanban,
   MessageSquare,
@@ -65,6 +66,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/", label: "Chats", icon: MessageSquare },
   { href: "/projects", label: "Projects", icon: FolderKanban },
   { href: "/artifacts", label: "Artifacts", icon: Blocks },
+  { href: "/code", label: "Code", icon: FileCode2 },
   { href: "/privacy", label: "Privacy", icon: ShieldCheck },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

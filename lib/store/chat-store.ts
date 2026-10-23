@@ -508,6 +508,7 @@ async function runStream(
   const state = get();
   const controller = new AbortController();
   activeController = controller;
+  const { designMode, designDirection } = useUIStore.getState();
 
   const optimisticUser: UiMessage | null = payload.message
     ? {
@@ -553,6 +554,10 @@ async function runStream(
         topP: payload.topP,
         maxTokens: payload.maxTokens,
         thinkingBudget: payload.thinkingBudget,
+        // Composer design controls: off forces the brief off, on forces it on,
+        // auto lets the server classify the turn; a null direction means no pin.
+        design: designMode === "auto" ? undefined : designMode === "on",
+        designDirection: designDirection ?? undefined,
         history: payload.history,
         allowCredentials: payload.allowCredentials,
         allowPolicyOnce: payload.allowPolicyOnce,

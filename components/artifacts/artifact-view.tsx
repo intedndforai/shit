@@ -2,18 +2,24 @@
 
 import * as React from "react";
 import { useTheme } from "next-themes";
-import { Code2, Eye, Maximize2, TriangleAlert, Wand2, X } from "lucide-react";
+import { Code2, Eye, Maximize2, Save, Sparkles, TriangleAlert, Wand2, X } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { CodeBlock } from "@/components/markdown/code-block";
 import { MarkdownRenderer } from "@/components/markdown/markdown-renderer";
 import { MermaidDiagram } from "@/components/markdown/mermaid-diagram";
+import { CraftReviewPanel } from "@/components/artifacts/craft-review-panel";
+import { SitePreview } from "@/components/artifacts/site-preview";
 import { useIsMounted } from "@/lib/hooks/use-mounted";
 import { cn } from "@/lib/utils";
-import type { ArtifactDto } from "@/lib/api-client";
+import { api, type ArtifactDto } from "@/lib/api-client";
 
 /** Types that have a live preview. React stays code-only (see below). */
-const PREVIEWABLE = new Set<ArtifactDto["type"]>(["html", "svg", "mermaid", "markdown"]);
+const PREVIEWABLE = new Set<ArtifactDto["type"]>(["html", "site", "svg", "mermaid", "markdown"]);
+
+/** Single-file types the export-to-workspace endpoint writes; `site` has its own button. */
+const EXPORTABLE = new Set<ArtifactDto["type"]>(["html", "svg", "markdown", "code"]);
 
 function languageFor(type: ArtifactDto["type"]): string {
   switch (type) {
@@ -146,10 +152,13 @@ function ArtifactFrame({
 export function ArtifactView({
   artifact,
   onRequestFix,
+  onSendBrief,
   className,
 }: {
   artifact: ArtifactDto;
   onRequestFix?: (message: string) => void;
+  /** When provided, a Craft tab hands the revision brief to the composer. */
+  onSendBrief?: (brief: string) => void;
   className?: string;
 }) {
   const mounted = useIsMounted();
@@ -158,13 +167,14 @@ export function ArtifactView({
   const canPreview = PREVIEWABLE.has(artifact.type);
 
   const [fullscreen, setFullscreen] = React.useState(false);
+  const [savingWorkspace, setSavingWorkspace] = React.useState(false);
 
   // Each stored version is a fresh document. Rather than resetting state in an
   // effect (which would cascade renders), the key below marks stale state and
   // the render pass swaps it out before anything is shown.
   const versionKey = `${artifact.id}:${artifact.version}`;
-  const defaultTab: "preview" | "code" = canPreview ? "preview" : "code";
-  const [tabState, setTabState] = React.useState<{ key: string; value: "preview" | "code" }>({
+  const defaultTab: "preview" | "code" | "craft" = canPreview ? "preview" : "code";
+  const [tabState, setTabState] = React.useState<{ key: string; value: "preview" | "code" | "craft" }>({
     key: versionKey,
     value: defaultTab,
   });
@@ -177,8 +187,22 @@ export function ArtifactView({
 
   const tab = tabState.key === versionKey ? tabState.value : defaultTab;
   const runtimeError = errorState.key === versionKey ? errorState.value : null;
-  const setTab = (value: "preview" | "code") => setTabState({ key: versionKey, value });
+  const setTab = (value: "preview" | "code" | "craft") => setTabState({ key: versionKey, value });
   const setRuntimeError = (value: string | null) => setErrorState({ key: versionKey, value });
+
+  const saveToWorkspace = React.useCallback(async () => {
+    setSavingWorkspace(true);
+    try {
+      const result = await api.exportArtifactToWorkspace(artifact.id);
+      const count = result.written.length;
+      toast.success(`Saved ${count} file${count === 1 ? "" : "s"} to ${result.target}`);
+    } catch (cause) {
+      // A 409 (the files are already there) carries the server's own message.
+      toast.error(cause instanceof Error ? cause.message : "Could not save to the workspace.");
+    } finally {
+      setSavingWorkspace(false);
+    }
+  }, [artifact.id]);
 
   const code = <CodeBlock language={languageFor(artifact.type)} code={artifact.content} />;
 
@@ -191,6 +215,8 @@ export function ArtifactView({
       <div className="min-h-0 flex-1 overflow-auto px-1">
         <MarkdownRenderer content={artifact.content} />
       </div>
+    ) : artifact.type === "site" ? (
+      <SitePreview artifact={artifact} onRequestFix={onRequestFix} />
     ) : (
       <ArtifactFrame artifact={artifact} dark={dark} onError={setRuntimeError} />
     )
@@ -219,20 +245,42 @@ export function ArtifactView({
               <Code2 className="size-3.5" />
               Code
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ml-auto"
-              onClick={() => setFullscreen(true)}
-              aria-label="Open preview fullscreen"
-            >
-              <Maximize2 className="size-3.5" />
-              Fullscreen
-            </Button>
           </>
         ) : (
           <span className="text-xs text-muted-foreground">{artifact.type} artifact</span>
         )}
+
+        {onSendBrief ? (
+          <Button
+            variant={tab === "craft" ? "secondary" : "ghost"}
+            size="sm"
+            aria-pressed={tab === "craft"}
+            onClick={() => setTab("craft")}
+          >
+            <Sparkles className="size-3.5" />
+            Craft
+          </Button>
+        ) : null}
+
+        <div className="ml-auto flex items-center gap-1">
+          {EXPORTABLE.has(artifact.type) ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={savingWorkspace}
+              onClick={() => void saveToWorkspace()}
+            >
+              <Save className="size-3.5" />
+              {savingWorkspace ? "Saving…" : "Save to workspace"}
+            </Button>
+          ) : null}
+          {canPreview ? (
+            <Button variant="ghost" size="sm" onClick={() => setFullscreen(true)} aria-label="Open preview fullscreen">
+              <Maximize2 className="size-3.5" />
+              Fullscreen
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       {runtimeError ? (
@@ -260,6 +308,8 @@ export function ArtifactView({
             </p>
             {code}
           </>
+        ) : tab === "craft" && onSendBrief ? (
+          <CraftReviewPanel artifactId={artifact.id} onSendBrief={onSendBrief} />
         ) : tab === "code" || !canPreview ? (
           code
         ) : (
@@ -289,6 +339,8 @@ export function ArtifactView({
                 <MermaidDiagram chart={artifact.content} />
               ) : artifact.type === "markdown" ? (
                 <MarkdownRenderer content={artifact.content} />
+              ) : artifact.type === "site" ? (
+                <SitePreview artifact={artifact} onRequestFix={onRequestFix} />
               ) : (
                 <ArtifactFrame artifact={artifact} dark={dark} onError={setRuntimeError} />
               )

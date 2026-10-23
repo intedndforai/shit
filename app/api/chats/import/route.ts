@@ -1,10 +1,13 @@
 import { z } from "zod";
-import { jsonOk, parseJson, errorResponse } from "@/lib/server/api";
+import { jsonError, jsonOk, parseJson, errorResponse } from "@/lib/server/api";
 import { appendMessage, createChat } from "@/lib/server/chats";
 import { getDefaultModel } from "@/lib/server/providers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/** Largest amount of message text and tool output one import may carry (characters). */
+const MAX_IMPORT_CHARS = 2_000_000;
 
 const contentPartSchema = z.object({
   kind: z.enum(["text", "image", "document", "thinking", "tool_use", "tool_result"]).or(z.string()),
@@ -38,6 +41,24 @@ const importSchema = z.object({
 export async function POST(request: Request) {
   const parsed = await parseJson(request, importSchema);
   if (!parsed.ok) return parsed.response;
+
+  // Size cap: reject oversized imports after shape validation, before any write.
+  const importChars = parsed.data.messages.reduce((total, message) => {
+    return (
+      total +
+      message.content.reduce((sum, part) => {
+        const value = part as { text?: string; output?: string } | string;
+        if (typeof value === "string") return sum + value.length;
+        return sum + (value.text?.length ?? 0) + (value.output?.length ?? 0);
+      }, 0)
+    );
+  }, 0);
+  if (importChars > MAX_IMPORT_CHARS) {
+    return jsonError(
+      `Imported chats are limited to ${MAX_IMPORT_CHARS} characters of message text and tool output.`,
+      413
+    );
+  }
 
   try {
     const defaultModel = getDefaultModel();

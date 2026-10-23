@@ -31,6 +31,7 @@ const bodySchema = z.object({
   modelId: z.string().nullable().optional(),
   providerId: z.string().nullable().optional(),
   systemPrompt: z.string().max(20000).nullable().optional(),
+  privacyMode: z.enum(['standard','private','incognito','local']).nullable().optional(),
 });
 
 /** POST /api/privacy/preview — the "what will be sent" inspector (metadata only). */

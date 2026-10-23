@@ -296,6 +296,71 @@
   border-radius: 0.75rem;
 }
 
+/* Inline element gaps: keys, highlights, disclosure blocks, scripts */
+
+.prose-conduit kbd {
+  font-family: var(--font-mono);
+  font-size: 0.78em;
+  line-height: 1;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  padding: 0.15em 0.4em;
+  white-space: nowrap;
+}
+
+.prose-conduit details {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 0.55rem 0.8rem;
+}
+
+.prose-conduit summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  list-style-position: inside;
+}
+
+.prose-conduit details[open] summary {
+  margin-bottom: 0.5rem;
+}
+
+.prose-conduit sup,
+.prose-conduit sub {
+  font-size: 0.75em;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
+}
+
+.prose-conduit sup {
+  top: -0.5em;
+}
+
+.prose-conduit sub {
+  bottom: -0.25em;
+}
+
+.prose-conduit li > ul,
+.prose-conduit li > ol {
+  margin-top: 0.25rem;
+}
+
+/* Tables: sticky headers and a whisper of row hover */
+
+.prose-conduit th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--background);
+}
+
+.prose-conduit table tbody tr:hover {
+  background: color-mix(in oklch, var(--secondary) 55%, transparent);
+}
 /* highlight.js tokens, theme-aware via CSS variables */
 .hljs {
   background: transparent;

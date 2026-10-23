@@ -13,7 +13,7 @@ import { MAX_EXTRACTED_CHARS, MAX_IMAGE_BYTES, MAX_ZIP_ENTRIES, MAX_ZIP_ENTRY_BY
  * office-format conversion are intentionally not faked; they are planned work.
  */
 
-export const attachmentKinds = ["text", "image", "document", "spreadsheet", "pdf", "other"] as const;
+export const attachmentKinds = ["text", "image", "document", "spreadsheet", "pdf", "other", "binary"] as const;
 export type AttachmentKind = (typeof attachmentKinds)[number];
 
 export interface ExtractedFile {
@@ -47,6 +47,10 @@ const TEXT_EXTENSIONS = [
 
 const IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"]);
 
+/** Media containers are accepted as opaque binaries: stored and streamed, never text-extracted. */
+const AUDIO_EXTENSIONS = [".mp3", ".wav", ".ogg", ".m4a", ".flac"];
+const VIDEO_EXTENSIONS = [".mp4", ".webm", ".mov"];
+
 const SPREADSHEET_MIMES = new Set([
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.ms-excel",
@@ -69,6 +73,14 @@ export function mimeFromName(name: string): string {
   if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
   if (extension === ".webp") return "image/webp";
   if (extension === ".gif") return "image/gif";
+  if (extension === ".mp3") return "audio/mpeg";
+  if (extension === ".wav") return "audio/wav";
+  if (extension === ".ogg") return "audio/ogg";
+  if (extension === ".m4a") return "audio/mp4";
+  if (extension === ".flac") return "audio/flac";
+  if (extension === ".mp4") return "video/mp4";
+  if (extension === ".webm") return "video/webm";
+  if (extension === ".mov") return "video/quicktime";
   if (extension === ".json") return "application/json";
   if (extension === ".md" || extension === ".markdown") return "text/markdown";
   if (TEXT_EXTENSIONS.includes(extension)) return "text/plain";
@@ -98,6 +110,61 @@ function clamp(text: string): { text: string; truncated: boolean } {
     text: `${trimmed.slice(0, MAX_EXTRACTED_CHARS)}\n\n…[truncated by Conduit]`,
     truncated: true,
   };
+}
+
+/**
+ * Spreadsheet formula neutralisation: a cell beginning with =, +, -, @, tab or
+ * CR is re-read as a formula (DDE / hyperlink exfiltration) when the extracted
+ * text is pasted into Excel or Sheets, so it gets a leading single quote - the
+ * spreadsheet convention that forces a literal string. Extracted TEXT only;
+ * stored bytes are never rewritten.
+ */
+const FORMULA_STARTS = ["=", "+", "-", "@", "\t", "\r"];
+
+function neutraliseCell(value: string): string {
+  return value.length > 0 && FORMULA_STARTS.includes(value[0]) ? "'" + value : value;
+}
+
+/**
+ * Cell-to-text pass for delimited text (CSV/TSV): walks the buffer field by
+ * field so quoted cells are handled, neutralising each cell value while the
+ * original quoting, delimiters and line breaks stay intact.
+ */
+function neutraliseDelimitedCells(text: string, delimiter: string): string {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const quoted = text[i] === '"';
+    let value = "";
+    if (quoted) {
+      i += 1;
+      while (i < text.length) {
+        if (text[i] === '"') {
+          if (text[i + 1] === '"') {
+            value += '"';
+            i += 2;
+            continue;
+          }
+          i += 1;
+          break;
+        }
+        value += text[i];
+        i += 1;
+      }
+      out += '"' + neutraliseCell(value).replace(/"/g, '""') + '"';
+    } else {
+      while (i < text.length && text[i] !== delimiter && text[i] !== "\n" && text[i] !== "\r") {
+        value += text[i];
+        i += 1;
+      }
+      out += neutraliseCell(value);
+    }
+    if (i < text.length && (text[i] === delimiter || text[i] === "\n" || text[i] === "\r")) {
+      out += text[i];
+      i += 1;
+    }
+  }
+  return out;
 }
 
 function isTextLike(mime: string, name: string): boolean {
@@ -237,7 +304,10 @@ async function extractSpreadsheet(bytes: Buffer): Promise<ExtractedFile> {
     if (rows.length > limited.length) truncated = true;
     blocks.push(
       `### ${name}\n\n${limited
-        .map((row) => `| ${row.map((cell) => String(cell ?? "").replace(/\|/g, "\\|")).join(" | ")} |`)
+        .map(
+          (row) =>
+            `| ${row.map((cell) => neutraliseCell(String(cell ?? "")).replace(/\|/g, "\\|")).join(" | ")} |`
+        )
         .join("\n")}`
     );
   }
@@ -435,16 +505,29 @@ export async function extractFile(input: { name: string; mime: string; bytes: Bu
     return extractZip(input.bytes);
   }
 
+  if (
+    mime.startsWith("audio/") ||
+    mime.startsWith("video/") ||
+    AUDIO_EXTENSIONS.includes(ext) ||
+    VIDEO_EXTENSIONS.includes(ext)
+  ) {
+    // Media is stored as-is and streamed back; no text extraction is attempted.
+    return { kind: "binary", truncated: false };
+  }
+
   if (isTextLike(mime, name)) {
     if (input.bytes.includes(0)) {
       throw new UnsupportedFileError("That file looks binary rather than text. ZIP and office formats are extracted from their own containers.");
     }
-    const { text, truncated } = clamp(input.bytes.toString("utf8"));
+    const raw = input.bytes.toString("utf8");
+    const delimited = [".csv", ".tsv"].includes(ext) || mime === "text/csv" || mime === "text/tab-separated-values";
+    const delimiter = ext === ".tsv" || mime === "text/tab-separated-values" ? "\t" : ",";
+    const { text, truncated } = clamp(delimited ? neutraliseDelimitedCells(raw, delimiter) : raw);
     const kind: AttachmentKind = ext === ".csv" || ext === ".tsv" ? "spreadsheet" : "text";
     return { kind, text, truncated };
   }
 
   throw new UnsupportedFileError(
-    "Conduit cannot read " + (mime || ext || "that file type") + " yet. Supported: text/code, CSV, JSON, PDF, DOCX, XLSX, PNG, JPEG, WebP, GIF, and ZIP archives. OCR for scanned documents isn't bundled."
+    "Conduit cannot read " + (mime || ext || "that file type") + " yet. Supported: text/code, CSV, JSON, PDF, DOCX, XLSX, PNG, JPEG, WebP, GIF, audio/video, and ZIP archives. OCR for scanned documents isn't bundled."
   );
 }

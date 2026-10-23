@@ -19,7 +19,9 @@ function hostOf(value?: string): string {
  */
 export function RemoteImage({ src, alt }: { src?: string; alt?: string }) {
   const [state, setState] = React.useState<"blocked" | "loading" | "shown">("blocked");
-  const local = Boolean(src && /^(data:|blob:)/i.test(src));
+  // A root-relative path (but not `//host/...`) is this app's own bytes, served
+  // from /api/files/..., so loading it makes no third-party request.
+  const local = Boolean(src && (/^(data:|blob:)/i.test(src) || (/^\/(?!\/)/.test(src))));
 
   if (local && src) {
     // eslint-disable-next-line @next/next/no-img-element
@@ -32,7 +34,15 @@ export function RemoteImage({ src, alt }: { src?: string; alt?: string }) {
       <span className="my-2 inline-flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-border bg-secondary/40 px-2.5 py-1.5 text-xs text-muted-foreground">
         <ImageOff className="size-3.5 shrink-0" aria-hidden />
         <span>
-          Remote image blocked · <span className="font-mono">{hostOf(src)}</span>
+          Remote image blocked ·{" "}
+          {alt ? (
+            <>
+              <span className="text-foreground">{alt}</span>{" "}
+              <span className="font-mono">({hostOf(src)})</span>
+            </>
+          ) : (
+            <span className="font-mono">{hostOf(src)}</span>
+          )}
         </span>
         {src ? (
           <button

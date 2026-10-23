@@ -26,6 +26,8 @@ const providerBaseUrl = process.argv[3] ?? "http://127.0.0.1:4123/v1";
 const CANARY_EMAIL = "canary-7f3a@example.com";
 const CANARY_TERM = "Project-Orion";
 const CANARY_PASSWORD = "hunter2secret";
+// Shared by the private egress turn and the parity preview so counts cannot drift.
+const PRIVATE_TURN_MESSAGE = `echo this straight back please: my address is ${CANARY_EMAIL}`;
 
 const results = [];
 function check(name, ok, detail = "") {
@@ -240,7 +242,7 @@ async function main() {
 
   const echoed = await streamChat({
     chatId: privateChatId,
-    message: `echo this straight back please: my address is ${CANARY_EMAIL}`,
+    message: PRIVATE_TURN_MESSAGE,
   });
   check("private turn streams a reply", echoed.ok && echoed.text.length > 0, `${echoed.text.length} chars`);
   check("reply restores the real email", echoed.text.includes(CANARY_EMAIL), echoed.text.slice(0, 90));
@@ -391,7 +393,21 @@ async function main() {
     body: JSON.stringify({ webSearch: { enabled: true }, searchApiKey: "fake-search-key" }),
   });
 
-  await jsonFetch("/api/privacy", { method: "PATCH", body: JSON.stringify({ defaultMode: "standard" }) });
+  const privatePreviewCheck = await jsonFetch("/api/privacy/preview", {
+    method: "POST",
+    body: JSON.stringify({
+      modelId,
+      providerId,
+      privacyMode: "private",
+      message: PRIVATE_TURN_MESSAGE,
+    }),
+  });
+  check(
+    "private mode preview reports redactions total equal to egress redaction count for same turn",
+    (privatePreviewCheck.body?.preview?.redactions?.total ?? -1) === (providerEvent?.redactionCount ?? -2) &&
+      (privatePreviewCheck.body?.preview?.redactions?.total ?? 0) >= 1,
+    `previewTotal=${privatePreviewCheck.body?.preview?.redactions?.total} egressCount=${providerEvent?.redactionCount}`
+  );  await jsonFetch("/api/privacy", { method: "PATCH", body: JSON.stringify({ defaultMode: "standard" }) });
   const standardPreview = await jsonFetch("/api/privacy/preview", {
     method: "POST",
     body: JSON.stringify({ modelId, providerId, message: "hello" }),
@@ -466,8 +482,6 @@ async function main() {
     /^[0-9a-f]{64}$/.test(preview?.payloadHash ?? ""),
     (preview?.payloadHash ?? "(none)").slice(0, 12)
   );
-  await jsonFetch("/api/privacy", { method: "PATCH", body: JSON.stringify({ defaultMode: "standard" }) });
-
   /* --- Section 3.8-3.10: delete everything ------------------------------- */
 
   const deleted = await jsonFetch("/api/privacy", { method: "POST", body: JSON.stringify({ action: "delete-all" }) });

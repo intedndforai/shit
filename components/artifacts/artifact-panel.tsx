@@ -3,6 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { createTwoFilesPatch } from "diff";
+import { toast } from "sonner";
 import { Blocks, ChevronLeft, ChevronRight, Copy, Download, FileCode2, GitCompare, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +20,7 @@ import { cn } from "@/lib/utils";
 export function ArtifactPanel() {
   const open = useUIStore((state) => state.artifactsOpen);
   const setOpen = useUIStore((state) => state.setArtifactsOpen);
+  const setComposerDraft = useUIStore((state) => state.setComposerDraft);
   const chatId = useChatStore((state) => state.chatId);
   const messages = useChatStore((state) => state.messages);
   const streaming = useChatStore((state) => state.streaming);
@@ -102,6 +104,16 @@ export function ArtifactPanel() {
     [current, send, streaming]
   );
 
+  // The revision brief is never sent automatically: it lands in the composer so
+  // the user can read and edit it first.
+  const sendBrief = React.useCallback(
+    (brief: string) => {
+      setComposerDraft(brief);
+      toast.info("Revision brief added to the composer. Edit it before sending.");
+    },
+    [setComposerDraft]
+  );
+
   const diffText = React.useMemo(() => {
     if (availableVersions.length < 2) return "";
     const previous = availableVersions[Math.max(0, versionIndex - 1)];
@@ -138,6 +150,7 @@ export function ArtifactPanel() {
       case "svg":
         return "svg";
       case "html":
+      case "site":
         return "html";
       default:
         return "txt";
@@ -293,7 +306,11 @@ export function ArtifactPanel() {
                     {diffText}
                   </pre>
                 ) : (
-                  <ArtifactView artifact={current} onRequestFix={streaming ? undefined : requestFix} />
+                  <ArtifactView
+                    artifact={current}
+                    onRequestFix={streaming ? undefined : requestFix}
+                    onSendBrief={sendBrief}
+                  />
                 )}
               </div>
 

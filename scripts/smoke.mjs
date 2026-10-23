@@ -530,7 +530,7 @@ check(
 
 const staleResult = await jsonFetch("/api/chat/tool-result", {
   method: "POST",
-  body: JSON.stringify({ id: "call_that_never_existed", output: "noop" }),
+  body: JSON.stringify({ id: "call_that_never_existed", chatId, output: "noop" }),
 });
 check("a stale tool result is rejected", staleResult.status === 404, `HTTP ${staleResult.status}`);
 
@@ -574,7 +574,7 @@ if (pythonResponse.ok && pythonResponse.body) {
         approval = event;
         delivered = await jsonFetch("/api/chat/tool-result", {
           method: "POST",
-          body: JSON.stringify({ id: event.id, output: "stdout:\n42\n", isError: false }),
+          body: JSON.stringify({ id: event.id, chatId: pythonChatId, output: "stdout:\n42\n", isError: false }),
         });
       }
     }

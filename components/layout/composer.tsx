@@ -7,6 +7,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { AttachmentChips } from "@/components/chat/attachments/attachment-chips";
 import { ChatControls } from "@/components/chat/chat-controls";
 import { ToolsMenu } from "@/components/chat/tools-menu";
+import { DesignMenu } from "@/components/chat/design-menu";
 import { PrivacyBadge } from "@/components/privacy/privacy-badge";
 import { SendInspector } from "@/components/privacy/send-inspector";
 import { PrivacyBlockDialog } from "@/components/privacy/privacy-block-dialog";
@@ -467,6 +468,8 @@ export function Composer({
           </Tooltip>
 
           <ToolsMenu />
+
+          <DesignMenu />
 
           <ChatControls />
 

@@ -5,6 +5,7 @@ import { Check, ChevronRight, Loader2, Play, ShieldCheck, TriangleAlert, Wrench,
 import type { ContentPart } from "@/lib/db/schema";
 import { denyToolInBrowser, runToolInBrowser } from "@/lib/client/code-tools";
 import { api } from "@/lib/api-client";
+import { useChatStore } from "@/lib/store/chat-store";
 import { useUIStore } from "@/lib/store/ui-store";
 import { cn } from "@/lib/utils";
 
@@ -213,6 +214,7 @@ function CodeRunPanel({ call }: { call: ToolUsePart }) {
 function ServerApprovalPanel({ call }: { call: ToolUsePart }) {
   const run = useUIStore((state) => state.toolRuns[call.id]);
   const patchToolRun = useUIStore((state) => state.patchToolRun);
+  const chatId = useChatStore((state) => state.chatId);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -220,7 +222,7 @@ function ServerApprovalPanel({ call }: { call: ToolUsePart }) {
     setBusy(true);
     setError(null);
     try {
-      await api.postToolResult({ id: call.id, decision });
+      await api.postToolResult({ id: call.id, chatId: chatId ?? "", decision });
       patchToolRun(call.id, { status: decision === "run" ? "running" : "denied" });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not record your decision.");

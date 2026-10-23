@@ -82,6 +82,32 @@ export interface WorkspaceStatus {
   autoApproveWrites: boolean;
 }
 
+/** One entry in the flat tree the code workspace renders. */
+export interface WorkspaceNode {
+  name: string;
+  /** Path relative to the workspace root, always with `/` separators. */
+  path: string;
+  type: "file" | "directory";
+  size?: number;
+}
+
+/** A file opened in the editor; the flags are explicit so the UI never guesses. */
+export interface WorkspaceFile {
+  path: string;
+  content: string;
+  bytes: number;
+  lines: number;
+  tooLarge: boolean;
+  binary: boolean;
+}
+
+/** The result of saving a file from the editor. */
+export interface WorkspaceWriteResult {
+  path: string;
+  bytes: number;
+  created: boolean;
+}
+
 function codingConfig(): CodingConfig {
   return readToolsConfig().coding;
 }
@@ -499,4 +525,129 @@ export function runCommand(input: { command: string; cwd?: string; timeoutMs?: n
   if (stderr) parts.push(`stderr:\n${stderr}`);
   if (!stdout && !stderr) parts.push("(no output)");
   return clampOutput(parts.join("\n"));
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Structured editor + preview helpers                                  */
+/* ------------------------------------------------------------------ */
+
+/** The editor reads a whole file up to this size before saying "too large". */
+const MAX_EDITOR_BYTES = 2_000_000;
+/** The preview route refuses anything bigger than this rather than buffering it. */
+const MAX_PREVIEW_BYTES = 25 * 1024 * 1024;
+
+/**
+ * The workspace folder as a flat list, directories before files, relative to the
+ * workspace root. The same guards as the model tools apply: skipped build dirs,
+ * secret-looking names and anything outside the root never appear.
+ */
+export function fileTree(input: { path?: string; depth?: number } = {}): WorkspaceNode[] {
+  requireEnabled();
+  const start = resolveTarget(input.path ?? "");
+  if (!fs.existsSync(start)) {
+    throw new WorkspaceError("That folder does not exist in the workspace yet.");
+  }
+  if (!fs.statSync(start).isDirectory()) {
+    throw new WorkspaceError("The tree view takes a folder, not a file.");
+  }
+  const depth = Math.min(Math.max(Math.trunc(Number(input.depth ?? 3)) || 3, 1), 8);
+  const nodes: WorkspaceNode[] = [];
+
+  const walk = (dir: string, level: number) => {
+    if (nodes.length >= MAX_ENTRIES) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    entries.sort((left, right) => {
+      if (left.isDirectory() !== right.isDirectory()) return left.isDirectory() ? -1 : 1;
+      return left.name.localeCompare(right.name);
+    });
+    for (const entry of entries) {
+      if (nodes.length >= MAX_ENTRIES) return;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory() && SKIP_DIRS.has(entry.name)) continue;
+      if (denyReason(full)) continue;
+      const relative = relativeToRoot(full);
+      if (entry.isDirectory()) {
+        nodes.push({ name: entry.name, path: relative, type: "directory" });
+        if (level < depth) walk(full, level + 1);
+      } else if (entry.isFile()) {
+        let size = 0;
+        try {
+          size = fs.statSync(full).size;
+        } catch {
+          size = 0;
+        }
+        nodes.push({ name: entry.name, path: relative, type: "file", size });
+      }
+    }
+  };
+
+  walk(start, 1);
+  return nodes;
+}
+
+/**
+ * Read one file for the editor. Oversize and binary files come back with
+ * explicit flags rather than an error, so the workspace can explain itself.
+ */
+export function readWorkspaceFile(input: { path: string }): WorkspaceFile {
+  requireEnabled();
+  const target = guardFile(input.path ?? "");
+  if (!fs.existsSync(target)) throw new WorkspaceError("That file does not exist in the workspace.");
+  const stats = fs.statSync(target);
+  if (stats.isDirectory()) throw new WorkspaceError("That path is a folder. Pick a file instead.");
+  const relative = relativeToRoot(target);
+  if (stats.size > MAX_EDITOR_BYTES) {
+    return { path: relative, content: "", bytes: stats.size, lines: 0, tooLarge: true, binary: false };
+  }
+  const buffer = fs.readFileSync(target);
+  if (looksBinary(buffer)) {
+    return { path: relative, content: "", bytes: buffer.length, lines: 0, tooLarge: false, binary: true };
+  }
+  const content = buffer.toString("utf8");
+  return {
+    path: relative,
+    content,
+    bytes: buffer.length,
+    lines: content.split(/\r?\n/).length,
+    tooLarge: false,
+    binary: false,
+  };
+}
+
+/** Write one file from the editor: a direct user action, so there is no approval. */
+export function writeWorkspaceFile(input: { path: string; content: string }): WorkspaceWriteResult {
+  requireEnabled();
+  const target = guardFile(input.path ?? "");
+  const content = typeof input.content === "string" ? input.content : "";
+  const created = !fs.existsSync(target);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, content, "utf8");
+  return { path: relativeToRoot(target), bytes: Buffer.byteLength(content), created };
+}
+
+/**
+ * Raw bytes for the preview route, or null for anything not safely readable:
+ * outside the root, a secret-looking name, missing, not a file, or over the cap.
+ */
+export function readWorkspaceBytes(input: { path: string }): Buffer | null {
+  let target: string;
+  try {
+    target = guardFile(input.path ?? "");
+  } catch {
+    return null;
+  }
+  try {
+    if (!fs.existsSync(target)) return null;
+    const stats = fs.statSync(target);
+    if (!stats.isFile() || stats.size > MAX_PREVIEW_BYTES) return null;
+    return fs.readFileSync(target);
+  } catch {
+    return null;
+  }
 }

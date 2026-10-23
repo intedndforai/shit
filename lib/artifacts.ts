@@ -9,7 +9,9 @@
  *   </artifact>
  */
 
-export const ARTIFACT_TYPES = ["html", "react", "svg", "mermaid", "markdown", "code"] as const;
+import { inlineSite, parseSiteBundle } from "@/lib/sites/bundle";
+
+export const ARTIFACT_TYPES = ["html", "site", "react", "svg", "mermaid", "markdown", "code"] as const;
 export type ArtifactKind = (typeof ARTIFACT_TYPES)[number];
 
 export interface ParsedArtifact {
@@ -17,6 +19,22 @@ export interface ParsedArtifact {
   type: ArtifactKind;
   title: string | null;
   content: string;
+  /** The paths emitted by a `<site-file>` bundle, in order (empty otherwise). */
+  files: string[];
+}
+
+/** Any `<site-file>` tag means the block is a multi-file site, whatever it claims. */
+export const SITE_FILE_DELIMITER = /<site-file\b/i;
+
+const SITE_FILE_PATH = /<site-file\b[^>]*\bpath\s*=\s*["']([^"']+)["'][^>]*>/gi;
+
+/** The file paths a site bundle declares, in the order they appear. */
+export function siteFilePaths(content: string): string[] {
+  const paths: string[] = [];
+  for (const match of content.matchAll(SITE_FILE_PATH)) {
+    paths.push(match[1]);
+  }
+  return paths;
 }
 
 const ARTIFACT_PATTERN = /<artifact\b([^>]*)>([\s\S]*?)<\/artifact>/gi;
@@ -49,11 +67,18 @@ export function parseArtifacts(text: string): ParsedArtifact[] {
       attribute(attributes, "title") ??
       `artifact-${found.length + 1}`;
 
+    // A block that carries `<site-file>` is a site bundle even if it declared
+    // itself as html, so the multi-file previewer is the one that runs.
+    const declared = normaliseType(attribute(attributes, "type"));
+    const files = siteFilePaths(content);
+    const type: ArtifactKind = SITE_FILE_DELIMITER.test(content) ? "site" : declared;
+
     found.push({
       identifier,
-      type: normaliseType(attribute(attributes, "type")),
+      type,
       title: attribute(attributes, "title"),
       content,
+      files,
     });
   }
 
@@ -88,12 +113,25 @@ export function toStandaloneHtml(artifact: {
   content: string;
 }): string {
   const title = escapeHtml(artifact.title ?? artifact.identifier);
-  const inline =
-    artifact.type === "html" || artifact.type === "svg"
-      ? artifact.content
-      : `<pre style="white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${escapeHtml(
-          artifact.content
-        )}</pre>`;
+
+  let inline: string;
+  if (artifact.type === "site") {
+    // Flatten the bundle to its entry page. A parse failure (an empty or
+    // malformed bundle) falls back to the raw source rather than a blank file.
+    try {
+      inline = inlineSite(parseSiteBundle(artifact.content));
+    } catch {
+      inline = `<pre style="white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${escapeHtml(
+        artifact.content
+      )}</pre>`;
+    }
+  } else if (artifact.type === "html" || artifact.type === "svg") {
+    inline = artifact.content;
+  } else {
+    inline = `<pre style="white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${escapeHtml(
+      artifact.content
+    )}</pre>`;
+  }
 
   return [
     "<!doctype html>",

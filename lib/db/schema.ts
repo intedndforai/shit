@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { type AnySQLiteColumn, index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 /**
@@ -9,7 +8,20 @@ import { type AnySQLiteColumn, index, integer, real, sqliteTable, text } from "d
  * shipped model; feature code arrives in later milestones.
  */
 
-const uuid = () => randomUUID();
+/**
+ * A browser-safe UUID. `globalThis.crypto.randomUUID()` exists in every modern
+ * browser, in Workers, and in Node (>= 19). The fallback covers non-secure
+ * contexts, where `crypto.randomUUID` is not exposed: ids only need to be
+ * unique, not unpredictable, so Math.random is acceptable there.
+ */
+const uuid = () => {
+  const webCrypto = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (typeof webCrypto?.randomUUID === "function") return webCrypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
+    const value = Math.floor(Math.random() * 16);
+    return (char === "x" ? value : (value & 0x3) | 0x8).toString(16);
+  });
+};
 const now = () => new Date();
 
 /* ------------------------------------------------------------------ */
@@ -237,7 +249,7 @@ export type NewMessage = typeof messages.$inferInsert;
 /* Attachments (M4): bytes on disk, metadata + extracted text here     */
 /* ------------------------------------------------------------------ */
 
-export const attachmentKinds = ["text", "image", "document", "spreadsheet", "pdf", "other"] as const;
+export const attachmentKinds = ["text", "image", "document", "spreadsheet", "pdf", "other", "binary"] as const;
 export type AttachmentKind = (typeof attachmentKinds)[number];
 
 export const attachments = sqliteTable(
@@ -267,7 +279,7 @@ export type NewAttachment = typeof attachments.$inferInsert;
 /* Artifacts (M5)                                                      */
 /* ------------------------------------------------------------------ */
 
-export const artifactTypes = ["html", "react", "svg", "mermaid", "markdown", "code"] as const;
+export const artifactTypes = ["html", "site", "react", "svg", "mermaid", "markdown", "code"] as const;
 export type ArtifactType = (typeof artifactTypes)[number];
 
 export const artifacts = sqliteTable(

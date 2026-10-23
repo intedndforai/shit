@@ -2,9 +2,14 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { DEFAULT_CUSTOM_ACCENT, DEFAULT_CUSTOM_GLOW } from "@/lib/accent";
 
 export const ACCENTS = ["amber", "rose", "teal", "indigo"] as const;
 export type Accent = (typeof ACCENTS)[number];
+/** The stored accent setting: one of the presets, or a user-defined colour. */
+export type AccentSetting = Accent | "custom";
+/** How the accent brief is attached: automatically, always, or never. */
+export type DesignMode = "auto" | "on" | "off";
 
 /** An attachment in the composer: optimistic while the upload is in flight. */
 export interface DraftAttachment {
@@ -64,7 +69,14 @@ interface UIState {
   sidebarCollapsed: boolean;
   mobileNavOpen: boolean;
   /* Appearance */
-  accent: Accent;
+  accent: AccentSetting;
+  customAccent: string;
+  customGlow: string;
+  glowMode: "accent" | "custom";
+  /* Art direction (chat) */
+  designMode: DesignMode;
+  /** A pinned direction slug, or null to let the seed decide. */
+  designDirection: string | null;
   /* Overlays */
   searchOpen: boolean;
   shortcutsOpen: boolean;
@@ -84,7 +96,12 @@ interface UIState {
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
   setMobileNavOpen: (open: boolean) => void;
-  setAccent: (accent: Accent) => void;
+  setAccent: (accent: AccentSetting) => void;
+  setCustomAccent: (hex: string) => void;
+  setCustomGlow: (hex: string) => void;
+  setGlowMode: (mode: "accent" | "custom") => void;
+  setDesignMode: (mode: DesignMode) => void;
+  setDesignDirection: (slug: string | null) => void;
   setShortcutsOpen: (open: boolean) => void;
   setSearchOpen: (open: boolean) => void;
   setArtifactsOpen: (open: boolean) => void;
@@ -110,6 +127,11 @@ export const useUIStore = create<UIState>()(
       mobileNavOpen: false,
   shortcutsOpen: false,
       accent: "amber",
+      customAccent: DEFAULT_CUSTOM_ACCENT,
+      customGlow: DEFAULT_CUSTOM_GLOW,
+      glowMode: "accent",
+      designMode: "auto",
+      designDirection: null,
       searchOpen: false,
       artifactsOpen: false,
       composerDraft: "",
@@ -123,6 +145,11 @@ export const useUIStore = create<UIState>()(
   setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
       setMobileNavOpen: (mobileNavOpen) => set({ mobileNavOpen }),
       setAccent: (accent) => set({ accent }),
+      setCustomAccent: (customAccent) => set({ customAccent }),
+      setCustomGlow: (customGlow) => set({ customGlow }),
+      setGlowMode: (glowMode) => set({ glowMode }),
+      setDesignMode: (designMode) => set({ designMode }),
+      setDesignDirection: (designDirection) => set({ designDirection }),
       setSearchOpen: (searchOpen) => set({ searchOpen }),
       setArtifactsOpen: (artifactsOpen) => set({ artifactsOpen }),
       toggleArtifacts: () => set((state) => ({ artifactsOpen: !state.artifactsOpen })),
@@ -160,6 +187,11 @@ export const useUIStore = create<UIState>()(
       partialize: (state) => ({
         sidebarCollapsed: state.sidebarCollapsed,
         accent: state.accent,
+        customAccent: state.customAccent,
+        customGlow: state.customGlow,
+        glowMode: state.glowMode,
+        designMode: state.designMode,
+        designDirection: state.designDirection,
       }),
     }
   )

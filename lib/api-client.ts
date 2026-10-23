@@ -173,7 +173,7 @@ export interface ChatDetail {
   provider: { id: string; name: string; apiFormat: string } | null;
 }
 
-export type ArtifactKind = "html" | "react" | "svg" | "mermaid" | "markdown" | "code";
+export type ArtifactKind = "html" | "site" | "react" | "svg" | "mermaid" | "markdown" | "code";
 
 export interface ArtifactDto {
   id: string;
@@ -186,6 +186,70 @@ export interface ArtifactDto {
   version: number;
   createdAt: number;
   versionCount: number;
+}
+
+/* --- Craft review ------------------------------------------------------- */
+
+export type CraftSeverity = "critical" | "high" | "medium" | "low";
+
+export interface CraftFinding {
+  id: string;
+  severity: CraftSeverity;
+  title: string;
+  why: string;
+  fix: string;
+  /** Where each hit was seen: "file:line" entries. */
+  at: string[];
+  count: number;
+}
+
+export interface CraftReviewDto {
+  score: number;
+  grade: "exceptional" | "solid" | "generic" | "slop";
+  findings: CraftFinding[];
+  summary: string;
+  /** A revision brief, ready to send back to the model. */
+  brief: string;
+}
+
+/* --- Coding workspace --------------------------------------------------- */
+
+export interface WorkspaceStatusDto {
+  enabled: boolean;
+  root: string;
+  exists: boolean;
+  allowCommands: boolean;
+  autoApproveWrites: boolean;
+}
+
+export interface WorkspaceNodeDto {
+  name: string;
+  /** Path relative to the workspace root, always with `/` separators. */
+  path: string;
+  type: "file" | "directory";
+  size?: number;
+}
+
+export interface WorkspaceTreeDto {
+  status: WorkspaceStatusDto;
+  nodes: WorkspaceNodeDto[];
+  /** A setup note (folder missing, tree too large) when the server has one. */
+  note?: string;
+}
+
+export interface WorkspaceFileDto {
+  path: string;
+  content: string;
+  bytes: number;
+  lines: number;
+  tooLarge: boolean;
+  binary: boolean;
+}
+
+export interface WorkspaceWriteDto {
+  path: string;
+  bytes: number;
+  created: boolean;
 }
 
 export interface UploadedFile {
@@ -659,7 +723,7 @@ export const api = {
       { method: "PUT", body: JSON.stringify(patch) }
     ),
 
-  postToolResult: (input: { id: string; decision?: "run" | "deny"; output?: string; isError?: boolean }) =>
+  postToolResult: (input: { id: string; chatId: string; decision?: "run" | "deny"; output?: string; isError?: boolean }) =>
     request<{ ok: true }>("/api/chat/tool-result", { method: "POST", body: JSON.stringify(input) }),
 
   getTools: () => request<ToolsState>("/api/tools"),
@@ -669,6 +733,39 @@ export const api = {
     request<{ artifacts: ArtifactDto[] }>(`/api/artifacts${chatId ? `?chatId=${chatId}` : ""}`),
   getArtifact: (id: string) =>
     request<{ artifact: ArtifactDto; versions: ArtifactDto[] }>(`/api/artifacts/${id}`),
+  /** Save an artifact into the configured local workspace folder. */
+  exportArtifactToWorkspace: (
+    id: string,
+    input: { target?: string; overwrite?: boolean } = {}
+  ) =>
+    request<{ written: { path: string; bytes: number }[]; target: string }>(
+      `/api/artifacts/${id}/export-workspace`,
+      { method: "POST", body: JSON.stringify(input) }
+    ),
+
+  /* --- Craft review + coding workspace ----------------------------------- */
+  reviewArtifact: (id: string) =>
+    request<{ review: CraftReviewDto; artifact: { id: string; identifier: string; type: ArtifactKind } }>(
+      `/api/artifacts/${id}/review`,
+      { method: "POST" }
+    ),
+
+  getWorkspaceTree: (options: { path?: string; depth?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (options.path) params.set("path", options.path);
+    if (options.depth !== undefined) params.set("depth", String(options.depth));
+    const query = params.toString();
+    return request<WorkspaceTreeDto>(`/api/workspace/tree${query ? `?${query}` : ""}`);
+  },
+  readWorkspaceFile: (path: string) =>
+    request<{ file: WorkspaceFileDto; status: WorkspaceStatusDto }>(
+      `/api/workspace/file?path=${encodeURIComponent(path)}`
+    ),
+  writeWorkspaceFile: (input: { path: string; content: string }) =>
+    request<{ file: WorkspaceWriteDto }>("/api/workspace/file", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
 
   /* --- Projects, memory, personalization (M8) ---------------------------- */
   listProjects: () => request<{ projects: ProjectDto[] }>("/api/projects"),

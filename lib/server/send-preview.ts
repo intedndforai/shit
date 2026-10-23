@@ -34,6 +34,7 @@ export interface PreviewInput {
   modelId?: string | null;
   providerId?: string | null;
   systemPrompt?: string | null;
+  privacyMode?: PrivacyMode | null;
 }
 
 export type PreviewResult = { ok: true; preview: SendPreview } | { ok: false; status: number; error: string };
@@ -66,7 +67,7 @@ export function buildSendPreview(input: PreviewInput): PreviewResult {
   if (!provider) return { ok: false, status: 409, error: "The provider for this model no longer exists." };
 
   const settings = getPrivacySettings();
-  const mode: PrivacyMode = (chat?.privacyMode ?? settings.defaultMode) as PrivacyMode;
+  const mode: PrivacyMode = (input.privacyMode ?? chat?.privacyMode ?? settings.defaultMode) as PrivacyMode;
   const ephemeral = mode === "incognito" || mode === "local";
   const local = isLocalEndpoint(provider.baseUrl);
   const policy: ProviderPolicy = policyOf(provider);

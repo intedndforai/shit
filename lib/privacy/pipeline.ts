@@ -249,3 +249,47 @@ export function dataControlFlags(input: {
     note: "The selected provider does not expose a documented request-level data control, so no data-control flag was sent.",
   };
 }
+
+export function modeRedacts(mode: PrivacyMode): boolean {
+  return mode === "private" || mode === "local";
+}
+
+export interface EgressRedactionResult {
+  messages: RedactableMessage[];
+  entries: RedactionEntry[];
+  summary: RedactionSummary;
+  credentials: RedactionSummaryItem[];
+}
+
+export function redactForEgress(
+  mode: PrivacyMode,
+  messages: RedactableMessage[],
+  options: RedactOptions,
+  systemPrompt?: string | null
+): EgressRedactionResult {
+  if (!modeRedacts(mode)) {
+    return {
+      messages: messages.map((m) => ({ ...m, content: [...m.content] })),
+      entries: [],
+      summary: summarizeRedactions([]),
+      credentials: [],
+    };
+  }
+  const historyResult = redactMessages(messages, options);
+  let entries = [...historyResult.entries];
+  let systemText = systemPrompt ?? "";
+  if (systemText) {
+    const sysRes = redactText(systemText, options);
+    systemText = sysRes.text;
+    entries = [...entries, ...sysRes.entries];
+  }
+  const summary = summarizeRedactions(entries);
+  const credentials = summary.items.filter((i) => i.credential);
+  const outMessages = historyResult.messages.map((m) => ({ ...m, content: [...m.content] }));
+  return {
+    messages: outMessages,
+    entries,
+    summary,
+    credentials,
+  };
+}
